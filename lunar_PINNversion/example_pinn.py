@@ -1,15 +1,10 @@
 import torch
+import copy
 import torch.nn as nn
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 from torch.optim.lr_scheduler import ExponentialLR
-
-import torch.optim as optim
-from torch.cuda.amp import GradScaler, autocast
-
-criterion = nn.CrossEntropyLoss()
-scaler = GradScaler()
 
 if torch.cuda.is_available():
     device = torch.device("cuda")  # Select GPU
@@ -54,11 +49,12 @@ def true_H_torch(xyz):
 # -------------------------
 
 class PositionalEncoding(nn.Module):
-    def __init__(self, in_dim=3, num_frequencies=4):
+    def __init__(self, in_dim=3, num_frequencies=4, base_freq = 0.98):
         super().__init__()
         self.in_dim = in_dim
         self.num_frequencies = num_frequencies
-        freq_bands = 1.2 ** torch.arange(num_frequencies)
+        freq_bands = base_freq ** torch.arange(num_frequencies)
+        print(f"freq bands are: {freq_bands}")
         self.register_buffer("freq_bands", freq_bands)
     def forward(self, x):
         """
@@ -74,15 +70,13 @@ class PositionalEncoding(nn.Module):
         return self.in_dim * (1 + 2 * self.num_frequencies)
 
 
-    def out_dim(self):
-        return self.in_dim * (1 + 2 * self.num_frequencies)
-
 class PINN(nn.Module):
-    def __init__(self, pe_num_freqs =8,
+    def __init__(self, pe_num_freqs =6, base_freq = 1.3,
                  layers=[64,128,128,128]):
         super().__init__()
+        # in_dim = 3
 
-        self.pe = PositionalEncoding(in_dim=3, num_frequencies=pe_num_freqs)
+        self.pe = PositionalEncoding(in_dim=3, num_frequencies=pe_num_freqs, base_freq=base_freq)
 
         in_dim = self.pe.out_dim()
 
@@ -96,183 +90,18 @@ class PINN(nn.Module):
         self.net = nn.Sequential(*net)
 
     def forward(self, xyz):
-        xyz_pe = self.pe(xyz)
+        xyz_pe = self.pe.forward(xyz)
         return self.net(xyz_pe)
-
-model = PINN()
-
-# -------------------------
-# Laplacian
-# -------------------------
-def laplacian_phi(model, xyz):
-    xyz.requires_grad_(True)
-    phi = model(xyz)
-
-    grad = torch.autograd.grad(phi, xyz, torch.ones_like(phi), create_graph=True)[0]
-    phix, phiy, phiz = grad[:,0:1], grad[:,1:2], grad[:,2:3]
-
-    phixx = torch.autograd.grad(phix, xyz, torch.ones_like(phix), create_graph=True)[0][:,0:1]
-    phiyy = torch.autograd.grad(phiy, xyz, torch.ones_like(phiy), create_graph=True)[0][:,1:2]
-    phizz = torch.autograd.grad(phiz, xyz, torch.ones_like(phiz), create_graph=True)[0][:,2:3]
-
-    return phixx + phiyy + phizz
-
-
-# -------------------------
-# Training data
-# -------------------------
-N_f = 10000
-xyz_f = torch.rand(N_f,3)  # (0,1)^3 collocation points
-# xyz_f[:, 2] = 1
-
-# Boundary points on z=0
-N_b = 4000
-x = torch.rand(N_b,1)
-y = torch.rand(N_b,1)
-z = torch.zeros_like(x) + 0.25
-xyz_b = torch.cat([x,y,z], dim=1)
-
-# True magnetic field on bc
-H_true_b = true_H_torch(xyz_b).detach()
-# Move model to GPU
-
-
-# Move training data to GPU
-xyz_f = xyz_f.to(device)
-xyz_b = xyz_b.to(device)
-H_true_b = H_true_b.to(device)
-
-# -------------------------
-# Training
-# -------------------------
-
-n_iterations = 1500000
-target_lr = 1e-8
-initial_lr = 1e-3
-gamma = (target_lr / initial_lr) ** (1 / n_iterations)  # Decay factor per iteration
-
-
-if resume_training:  # If you're resuming training
-    # Load the model from a checkpoint
-    n_iterations = 2000000
-    target_lr = 1e-7
-    initial_lr = 1e-6
-    gamma = (target_lr / initial_lr) ** (1 / n_iterations)  # Decay factor per iteration
-
-    checkpoint = torch.load("trained_model_checkpoint.pth", map_location=device)
-
-    # Recreate the model, optimizer, and scheduler
-    model = PINN().to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=initial_lr)
-    scheduler = ExponentialLR(optimizer, gamma=gamma)
-
-    # Load checkpoint data
-    model.load_state_dict(checkpoint['model_state_dict'])
-    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-    # scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
-    start_iteration = checkpoint['iteration']
-
-    print(f"Resuming training from iteration {start_iteration}")
-else:
-    # Train model from scratch
-    model = PINN().to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=initial_lr)
-    scheduler = ExponentialLR(optimizer, gamma=gamma)
-    start_iteration = 0
-
-for it in range(start_iteration, n_iterations):
-    optimizer.zero_grad()
-
-    # PDE loss
-    lap = laplacian_phi(model, xyz_f)
-    loss_pde = torch.mean(lap**2)
-
-    # Boundary loss: match H = -∇Φ on z=0
-    xyz_b.requires_grad_(True)
-    phi_b = model(xyz_b)
-    grad_b = torch.autograd.grad(phi_b, xyz_b, torch.ones_like(phi_b), create_graph=True)[0]
-    H_pred_b = -grad_b
-    loss_bc = torch.mean((H_pred_b - H_true_b)**2) / (torch.mean(torch.abs(H_true_b)) + 1e-6)
-
-    loss = loss_pde + loss_bc
-    loss.backward()
-    optimizer.step()
-    scheduler.step()
-
-    optimizer.zero_grad()
-    if it % 500 == 0:
-        current_lr = optimizer.param_groups[0]["lr"]
-        print(f"iter {it}, loss = {loss.item():.4e}, PDE={loss_pde.item():.4e}, BC={loss_bc.item():.4e}, LR={current_lr:.1e}")
-
-    # Save a checkpoint every 5000 iterations
-    if it > 0 and it % 5000 == 0:
-        torch.save({
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'scheduler_state_dict': scheduler.state_dict(),
-            'iteration': it
-        }, "trained_model_checkpoint.pth")
-        print(f"Checkpoint saved at iteration {it}.")
-
-print("Training complete.")
-
-# Move the trained model to CPU
-model_cpu = model.to("cpu")
-print("Model has been moved back to CPU.")
-
-torch.save(model_cpu.state_dict(), "trained_model.pth")
-print("Model saved to trained_model.pth")
-
-
-
-# Make grid
-N = 80
-x = np.linspace(0,1,N)
-y = np.linspace(0,1,N)
-X, Y = np.meshgrid(x, y)
+        # return self.net(xyz)
 
 # Evaluate PINN solution on z=0 and z=1
-def evaluate_phi(z_value):
+def evaluate_phi(model_cpu, z_value):
     pts = np.stack([X.flatten(), Y.flatten(), z_value*np.ones_like(X.flatten())], axis=1)
     pts_t = torch.tensor(pts, dtype=torch.float32)
     with torch.no_grad():
-        phi_pred = model(pts_t).numpy().reshape(N, N)
+        phi_pred = model_cpu(pts_t).numpy().reshape(N, N)
     phi_true = true_phi_np(X, Y, z_value)
     return phi_pred, phi_true
-
-phi_pred_0, phi_true_0 = evaluate_phi(0.0)
-phi_pred_1, phi_true_1 = evaluate_phi(0.5)
-
-# ---------------------------------------
-# Plot 4 panels
-# ---------------------------------------
-plt.figure(figsize=(14,10))
-
-# --- Bottom face z=0 ---
-plt.subplot(2,2,1)
-plt.title("PINN  Φ(x,y,0)")
-plt.pcolormesh(X, Y, phi_pred_0, shading='auto')
-plt.colorbar()
-
-plt.subplot(2,2,2)
-plt.title("True  Φ(x,y,0)")
-plt.pcolormesh(X, Y, phi_true_0, shading='auto')
-plt.colorbar()
-
-# --- Top face z=1 ---
-plt.subplot(2,2,3)
-plt.title("PINN  Φ(x,y,0.5)")
-plt.pcolormesh(X, Y, phi_pred_1, shading='auto')
-plt.colorbar()
-
-plt.subplot(2,2,4)
-plt.title("True  Φ(x,y,0.5)")
-plt.pcolormesh(X, Y, phi_true_1, shading='auto')
-plt.colorbar()
-
-plt.tight_layout()
-plt.savefig('../Outputs/example_new.png')
-plt.show()
 
 def plot_magnetic_field_comparison(model, X, Y, z_value, N=80, save_as=None):
     """
@@ -341,6 +170,7 @@ def plot_magnetic_field_comparison(model, X, Y, z_value, N=80, save_as=None):
     Hz_diff_grid = Hz_diff.reshape(N, N).detach().numpy()
 
     # --------- Plotting 3x3 Figure ---------
+    cmap_figs = 'gist_ncar'
 
     plt.figure(figsize=(15, 12))
 
@@ -348,7 +178,7 @@ def plot_magnetic_field_comparison(model, X, Y, z_value, N=80, save_as=None):
     plt.subplot(3, 3, 1)
     plt.title("True Hx (z={})".format(z_value))
     plt.pcolormesh(X, Y, Hx_true_grid,
-                   shading='auto', cmap='seismic',
+                   shading='auto', cmap=cmap_figs,
                    vmin=np.nanquantile(Hx_true_grid, 0.02),
                    vmax=np.nanquantile(Hx_true_grid, 0.98))
     plt.colorbar()
@@ -356,7 +186,7 @@ def plot_magnetic_field_comparison(model, X, Y, z_value, N=80, save_as=None):
     plt.subplot(3, 3, 2)
     plt.title("True Hy (z={})".format(z_value))
     plt.pcolormesh(X, Y, Hy_true_grid,
-                   shading='auto', cmap='seismic',
+                   shading='auto', cmap=cmap_figs,
                    vmin=np.nanquantile(Hy_true_grid, 0.02),
                    vmax=np.nanquantile(Hy_true_grid, 0.98))
     plt.colorbar()
@@ -364,7 +194,7 @@ def plot_magnetic_field_comparison(model, X, Y, z_value, N=80, save_as=None):
     plt.subplot(3, 3, 3)
     plt.title("True Hz (z={})".format(z_value))
     plt.pcolormesh(X, Y, Hz_true_grid,
-                   shading='auto', cmap='seismic',
+                   shading='auto', cmap=cmap_figs,
                    vmin=np.nanquantile(Hz_true_grid, 0.02),
                    vmax=np.nanquantile(Hz_true_grid, 0.98))
     plt.colorbar()
@@ -373,7 +203,7 @@ def plot_magnetic_field_comparison(model, X, Y, z_value, N=80, save_as=None):
     plt.subplot(3, 3, 4)
     plt.title("PINN Hx (z={})".format(z_value))
     plt.pcolormesh(X, Y, Hx_pred_grid,
-                   shading='auto', cmap='seismic',
+                   shading='auto', cmap=cmap_figs,
                    vmin=np.nanquantile(Hx_pred_grid, 0.02),
                    vmax=np.nanquantile(Hx_pred_grid, 0.98))
     plt.colorbar()
@@ -381,7 +211,7 @@ def plot_magnetic_field_comparison(model, X, Y, z_value, N=80, save_as=None):
     plt.subplot(3, 3, 5)
     plt.title("PINN Hy (z={})".format(z_value))
     plt.pcolormesh(X, Y, Hy_pred_grid,
-                   shading='auto', cmap='seismic',
+                   shading='auto', cmap=cmap_figs,
                    vmin=np.nanquantile(Hy_pred_grid, 0.02),
                    vmax=np.nanquantile(Hy_pred_grid, 0.98))
     plt.colorbar()
@@ -389,7 +219,7 @@ def plot_magnetic_field_comparison(model, X, Y, z_value, N=80, save_as=None):
     plt.subplot(3, 3, 6)
     plt.title("PINN Hz (z={})".format(z_value))
     plt.pcolormesh(X, Y, Hz_pred_grid,
-                   shading='auto', cmap='seismic',
+                   shading='auto', cmap=cmap_figs,
                    vmin=np.nanquantile(Hz_pred_grid, 0.02),
                    vmax=np.nanquantile(Hz_pred_grid, 0.98))
     plt.colorbar()
@@ -398,25 +228,25 @@ def plot_magnetic_field_comparison(model, X, Y, z_value, N=80, save_as=None):
     plt.subplot(3, 3, 7)
     plt.title("Difference Hx (z={})".format(z_value))
     plt.pcolormesh(X, Y, Hx_diff_grid / np.abs(Hx_true_grid),
-                   shading='auto', cmap='seismic',
-                   norm=colors.SymLogNorm(linthresh=0.1, linscale=0.03,
-                                          vmin=-5, vmax=5, base=10))
+                   shading='auto', cmap=cmap_figs,
+                   norm=colors.SymLogNorm(linthresh=0.1, linscale=0.2,
+                                          vmin=-3, vmax=3, base=10))
     plt.colorbar()
 
     plt.subplot(3, 3, 8)
     plt.title("Difference Hy (z={})".format(z_value))
     plt.pcolormesh(X, Y, Hy_diff_grid / np.abs(Hy_true_grid),
-                   shading='auto', cmap='seismic',
-                   norm=colors.SymLogNorm(linthresh=0.1, linscale=0.03,
-                                          vmin=-5, vmax=5, base=10))
+                   shading='auto', cmap=cmap_figs,
+                   norm=colors.SymLogNorm(linthresh=0.1, linscale=0.2,
+                                          vmin=-3, vmax=3, base=10))
     plt.colorbar()
 
     plt.subplot(3, 3, 9)
     plt.title("Difference Hz (z={})".format(z_value))
     plt.pcolormesh(X, Y, Hz_diff_grid / np.abs(Hz_true_grid),
-                   shading='auto', cmap='seismic',
-                   norm=colors.SymLogNorm(linthresh=0.1, linscale=0.03,
-                                          vmin=-5, vmax=5, base=10))
+                   shading='auto', cmap=cmap_figs,
+                   norm=colors.SymLogNorm(linthresh=0.1, linscale=0.2,
+                                          vmin=-3, vmax=3, base=10))
     plt.colorbar()
 
     plt.tight_layout()
@@ -456,14 +286,216 @@ def compute_H_from_phi(phi_fn, xyz):
     return Hx, Hy, Hz
 # Visualize magnetic field components at a specific height z=0.5
 
-heights = np.linspace(0, 1, num=11)
-for el in heights:
-    plot_magnetic_field_comparison(
-        model=model,
-        X=X,
-        Y=Y,
-        z_value=el,
-        N=80,
-        save_as=f"../Outputs/magnetic_field_comparison_z_{el}.png"  # Set to None if you don't want to save
-    )
+model = PINN(pe_num_freqs =6, base_freq = 1.4,)
+
+# -------------------------
+# Laplacian
+# -------------------------
+def laplacian_phi(model, xyz):
+    xyz.requires_grad_(True)
+    phi = model(xyz)
+
+    grad = torch.autograd.grad(phi, xyz, torch.ones_like(phi), create_graph=True)[0]
+    phix, phiy, phiz = grad[:,0:1], grad[:,1:2], grad[:,2:3]
+
+    phixx = torch.autograd.grad(phix, xyz, torch.ones_like(phix), create_graph=True)[0][:,0:1]
+    phiyy = torch.autograd.grad(phiy, xyz, torch.ones_like(phiy), create_graph=True)[0][:,1:2]
+    phizz = torch.autograd.grad(phiz, xyz, torch.ones_like(phiz), create_graph=True)[0][:,2:3]
+
+    return phixx + phiyy + phizz
+
+
+# -------------------------
+# Training data
+# -------------------------
+N_f = 100000
+xyz_f = torch.rand(N_f,3)  # (0,1)^3 collocation points
+# xyz_f[:, 2] = 1
+
+# Boundary points on z=0
+bc_height1 = 0.25
+bc_height2 = 0.40
+
+N_b1 = 4000
+x1 = torch.rand(N_b1,1)
+y1 = torch.rand(N_b1,1)
+z1 = torch.zeros_like(x1) + bc_height1
+xyz_b1 = torch.cat([x1,y1,z1], dim=1)
+
+# Boundary points on z=0
+N_b2 = 4000
+x2 = torch.rand(N_b2,1)
+y2 = torch.rand(N_b2,1)
+z2 = torch.zeros_like(x2) + bc_height2
+xyz_b2 = torch.cat([x2,y2,z2], dim=1)
+
+# True magnetic field on bc
+H_true_b1 = true_H_torch(xyz_b1).detach()
+H_true_b2 = true_H_torch(xyz_b2).detach()
+
+# Move model to GPU
+
+
+# Move training data to GPU
+xyz_f = xyz_f.to(device)
+
+xyz_b1 = xyz_b1.to(device)
+xyz_b2 = xyz_b2.to(device)
+H_true_b1 = H_true_b1.to(device)
+H_true_b2 = H_true_b2.to(device)
+
+# -------------------------
+# Training
+# -------------------------
+
+n_iterations = 60010
+target_lr = 1e-5
+initial_lr = 3e-3
+gamma = (target_lr / initial_lr) ** (1 / n_iterations)  # Decay factor per iteration
+
+
+if resume_training:  # If you're resuming training
+    # Load the model from a checkpoint
+    n_iterations = 2000000
+    target_lr = 1e-7
+    initial_lr = 1e-6
+    gamma = (target_lr / initial_lr) ** (1 / n_iterations)  # Decay factor per iteration
+
+    checkpoint = torch.load("trained_model_checkpoint.pth", map_location=device)
+
+    # Recreate the model, optimizer, and scheduler
+    model = PINN().to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=initial_lr)
+    scheduler = ExponentialLR(optimizer, gamma=gamma)
+
+    # Load checkpoint data
+    model.load_state_dict(checkpoint['model_state_dict'])
+    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    # scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+    start_iteration = checkpoint['iteration']
+
+    print(f"Resuming training from iteration {start_iteration}")
+else:
+    # Train model from scratch
+    model = PINN().to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=initial_lr)
+    scheduler = ExponentialLR(optimizer, gamma=gamma)
+    start_iteration = 0
+
+for it in range(start_iteration, n_iterations):
+    optimizer.zero_grad()
+
+    # PDE loss
+    lap = laplacian_phi(model, xyz_f)
+    loss_pde = torch.mean(lap**2)
+
+    # Boundary loss: match H = -∇Φ on z=0
+    xyz_b1.requires_grad_(True)
+    phi_b1 = model(xyz_b1)
+    grad_b1 = torch.autograd.grad(phi_b1, xyz_b1, torch.ones_like(phi_b1), create_graph=True)[0]
+    H_pred_b1 = -grad_b1
+    loss_bc1 = torch.mean((H_pred_b1 - H_true_b1)**2) / (torch.mean(torch.abs(H_true_b1)) + 1e-6)
+
+    # Boundary loss: match H = -∇Φ on z=0
+    xyz_b2.requires_grad_(True)
+    phi_b2 = model(xyz_b2)
+    grad_b2 = torch.autograd.grad(phi_b2, xyz_b2, torch.ones_like(phi_b2), create_graph=True)[0]
+    H_pred_b2 = -grad_b2
+    loss_bc2 = torch.mean((H_pred_b2 - H_true_b2)**2) / (torch.mean(torch.abs(H_true_b2)) + 1e-6)
+
+    loss = loss_pde + loss_bc1 + loss_bc2
+    loss.backward()
+    optimizer.step()
+    scheduler.step()
+
+    optimizer.zero_grad()
+    if it % 500 == 0:
+        current_lr = optimizer.param_groups[0]["lr"]
+        print(f"iter {it}, loss = {loss.item():.4e}, PDE={loss_pde.item():.4e}, ",
+              f"BC1={loss_bc1.item():.4e}, BC2={loss_bc2.item():.4e}, ",
+              f"LR={current_lr:.1e}")
+
+    # Save a checkpoint every 5000 iterations
+    if it > 0 and it % 5000 == 0:
+        torch.save({
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'scheduler_state_dict': scheduler.state_dict(),
+            'iteration': it
+        }, "trained_model_checkpoint.pth")
+        print(f"Checkpoint saved at iteration {it}.")
+
+        # Create a new instance of the same model
+        model_cpu = copy.deepcopy(model)  # Deep copy the model structure
+        model_cpu = model_cpu.to('cpu')  # Move the new copy to the CPU
+
+        # Copy the state_dict (weights and biases)
+        model_cpu.load_state_dict(model.state_dict())
+
+        # At this point:
+        # - model is on the GPU
+        # - model_cpu is a replica of model, but on the CPU
+        # Make grid
+        N = 80
+        x = np.linspace(0, 1, N)
+        y = np.linspace(0, 1, N)
+        X, Y = np.meshgrid(x, y)
+
+        phi_pred_0, phi_true_0 = evaluate_phi(model_cpu, 0.0)
+        phi_pred_1, phi_true_1 = evaluate_phi(model_cpu, 0.5)
+
+        heights = np.linspace(0, 1, num=11)
+        for el in heights:
+            plot_magnetic_field_comparison(
+                model=model_cpu,
+                X=X,
+                Y=Y,
+                z_value=el,
+                N=80,
+                save_as=f"../Outputs/Toy_model_2height_{bc_height1}_{bc_height2}/B_comp_z_{el}_it_{it}.png"  # Set to None if you don't want to save
+            )
+
+print("Training complete.")
+
+# Move the trained model to CPU
+model_cpu = model.to("cpu")
+print("Model has been moved back to CPU.")
+
+torch.save(model_cpu.state_dict(), "trained_model.pth")
+print("Model saved to trained_model.pth")
+
+phi_pred_0, phi_true_0 = evaluate_phi(0.0)
+phi_pred_1, phi_true_1 = evaluate_phi(0.5)
+
+# ---------------------------------------
+# Plot 4 panels
+# ---------------------------------------
+plt.figure(figsize=(14,10))
+
+# --- Bottom face z=0 ---
+plt.subplot(2,2,1)
+plt.title("PINN  Φ(x,y,0)")
+plt.pcolormesh(X, Y, phi_pred_0, shading='auto')
+plt.colorbar()
+
+plt.subplot(2,2,2)
+plt.title("True  Φ(x,y,0)")
+plt.pcolormesh(X, Y, phi_true_0, shading='auto')
+plt.colorbar()
+
+# --- Top face z=1 ---
+plt.subplot(2,2,3)
+plt.title("PINN  Φ(x,y,0.5)")
+plt.pcolormesh(X, Y, phi_pred_1, shading='auto')
+plt.colorbar()
+
+plt.subplot(2,2,4)
+plt.title("True  Φ(x,y,0.5)")
+plt.pcolormesh(X, Y, phi_true_1, shading='auto')
+plt.colorbar()
+
+plt.tight_layout()
+plt.savefig('../Outputs/example_new.png')
+plt.show()
+
 
