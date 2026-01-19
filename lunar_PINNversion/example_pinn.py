@@ -511,8 +511,8 @@ print("Model has been moved back to CPU.")
 torch.save(model_cpu.state_dict(), "trained_model.pth")
 print("Model saved to trained_model.pth")
 
-phi_pred_0, phi_true_0 = evaluate_phi(0.0)
-phi_pred_1, phi_true_1 = evaluate_phi(0.5)
+phi_pred_0, phi_true_0 = evaluate_phi(model_cpu, 0.0)
+phi_pred_1, phi_true_1 = evaluate_phi(model_cpu, 0.5)
 
 # ---------------------------------------
 # Plot 4 panels
