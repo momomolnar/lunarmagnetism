@@ -29,33 +29,35 @@ def true_phi_torch(xyz):
     x = xyz[:,0:1]
     y = xyz[:,1:2]
     z = xyz[:,2:3]
-    return (
-        torch.cos(kx*x)
-        * torch.sin(ky*y)
-        * torch.exp(-kz*z)
-    )
+    return (torch.cos(kx*x) * torch.sin(ky*y) * torch.exp(-kz*z))
 
 def true_H_torch(xyz):
     xyz.requires_grad_(True)
     phi = true_phi_torch(xyz)
-    grad = torch.autograd.grad(phi, xyz, torch.ones_like(phi),
-                               create_graph=True)[0]
+    grad = torch.autograd.grad(
+        phi, xyz, torch.ones_like(phi), create_graph=True,
+    )[0]
     H = -grad
     return H
-
 
 # -------------------------
 # PINN Model
 # -------------------------
 
 class PositionalEncoding(nn.Module):
-    def __init__(self, in_dim=3, num_frequencies=4, base_freq = 0.98):
+    def __init__(
+        self,
+        in_dim=3,
+        num_frequencies=4,
+        base_freq=0.98,
+    ):
         super().__init__()
         self.in_dim = in_dim
         self.num_frequencies = num_frequencies
         freq_bands = base_freq ** torch.arange(num_frequencies)
         print(f"freq bands are: {freq_bands}")
         self.register_buffer("freq_bands", freq_bands)
+
     def forward(self, x):
         """
         x: (N,3)
@@ -64,6 +66,7 @@ class PositionalEncoding(nn.Module):
         for f in self.freq_bands:
             enc.append(torch.sin(2 * np.pi * f * x))
             enc.append(torch.cos(2 * np.pi * f * x))
+
         return torch.cat(enc, dim=-1)
 
     def out_dim(self):
@@ -71,12 +74,18 @@ class PositionalEncoding(nn.Module):
 
 
 class PINN(nn.Module):
-    def __init__(self, pe_num_freqs =6, base_freq = 1.3,
-                 layers=[64,128,128,128]):
+    def __init__(
+        self,
+        pe_num_freqs=6,
+        base_freq = 1.3,
+        layers=[64,128,128,128],
+    ):
         super().__init__()
         # in_dim = 3
 
-        self.pe = PositionalEncoding(in_dim=3, num_frequencies=pe_num_freqs, base_freq=base_freq)
+        self.pe = PositionalEncoding(
+            in_dim=3, num_frequencies=pe_num_freqs, base_freq=base_freq,
+        )
 
         in_dim = self.pe.out_dim()
 
@@ -87,6 +96,7 @@ class PINN(nn.Module):
             net.append(nn.Linear(layer_dims[i], layer_dims[i + 1]))
             if i < len(layer_dims) - 2:
                 net.append(nn.Tanh())
+
         self.net = nn.Sequential(*net)
 
     def forward(self, xyz):
@@ -95,18 +105,35 @@ class PINN(nn.Module):
         # return self.net(xyz)
 
 # Evaluate PINN solution on z=0 and z=1
-def evaluate_phi(model_cpu, z_value):
-    pts = np.stack([X.flatten(), Y.flatten(), z_value*np.ones_like(X.flatten())], axis=1)
+def evaluate_phi(
+    model_cpu,
+    z_value,
+):
+    pts = np.stack(
+        [X.flatten(), Y.flatten(), z_value*np.ones_like(X.flatten())],
+        axis=1,
+    )
+
     pts_t = torch.tensor(pts, dtype=torch.float32)
+
     with torch.no_grad():
         phi_pred = model_cpu(pts_t).numpy().reshape(N, N)
+
     phi_true = true_phi_np(X, Y, z_value)
+
     return phi_pred, phi_true
 
-def plot_magnetic_field_comparison(model, X, Y, z_value, N=80, save_as=None):
+def plot_magnetic_field_comparison(
+    model: torch.nn.Module,
+    X: np.ndarray,
+    Y: np.ndarray,
+    z_value: float,
+    N: int = 80,
+    save_as: str | None = None,
+) -> None:
     """
-    Function to plot the magnetic field components (H = -∇Φ) at a given height z_value
-    for the true solution, the PINN solution, and their difference.
+    Function to plot the magnetic field components (H = -∇Φ) at a given height 
+    z_value for the true solution, the PINN solution, and their difference.
 
     Args:
         model (torch.nn.Module): The trained PINN model.
@@ -114,7 +141,8 @@ def plot_magnetic_field_comparison(model, X, Y, z_value, N=80, save_as=None):
         Y (np.ndarray): Meshgrid for y-coordinates.
         z_value (float): Height at which to compute the magnetic field.
         N (int): Resolution of the grid. Default is 80.
-        save_as (str): Optional. Filename to save the plot. If None, the plot is only displayed.
+        save_as (str): Optional. Filename to save the plot. If None, the plot 
+            is only displayed.
 
     Returns:
         None: Displays or saves a figure with 9 subplots.
@@ -123,7 +151,10 @@ def plot_magnetic_field_comparison(model, X, Y, z_value, N=80, save_as=None):
     # ---------------------------------------
     # Compute the XYZ grid at height z_value
     # ---------------------------------------
-    pts = np.stack([X.flatten(), Y.flatten(), z_value * np.ones_like(X.flatten())], axis=1)
+    pts = np.stack(
+        [X.flatten(), Y.flatten(), z_value * np.ones_like(X.flatten())],
+        axis=1,
+    )
     pts_t = torch.tensor(pts, dtype=torch.float32)
 
     # Compute magnetic field components
@@ -145,7 +176,9 @@ def plot_magnetic_field_comparison(model, X, Y, z_value, N=80, save_as=None):
 
     xyz_b.requires_grad_(True)
     phi_b = model(xyz_b)
-    grad_b = torch.autograd.grad(phi_b, xyz_b, torch.ones_like(phi_b), create_graph=True)[0]
+    grad_b = torch.autograd.grad(
+        phi_b, xyz_b, torch.ones_like(phi_b), create_graph=True,
+    )[0]
     H_pred = -grad_b
     Hx_pred = H_pred[:, 0]
     Hy_pred = H_pred[:, 1]
@@ -264,7 +297,8 @@ def compute_H_from_phi(phi_fn, xyz):
     """
     Compute magnetic field components H = -∇Φ.
     Args:
-        phi_fn (callable): Function to compute scalar potential Φ, either analytical or from PINN.
+        phi_fn (callable): Function to compute scalar potential Φ, either 
+            analytical or from PINN.
         xyz (torch.Tensor): Input XYZ grid points.
     Returns:
         Hx, Hy, Hz: Magnetic field components.
@@ -295,12 +329,20 @@ def laplacian_phi(model, xyz):
     xyz.requires_grad_(True)
     phi = model(xyz)
 
-    grad = torch.autograd.grad(phi, xyz, torch.ones_like(phi), create_graph=True)[0]
+    grad = torch.autograd.grad(
+        phi, xyz, torch.ones_like(phi), create_graph=True,
+    )[0]
     phix, phiy, phiz = grad[:,0:1], grad[:,1:2], grad[:,2:3]
 
-    phixx = torch.autograd.grad(phix, xyz, torch.ones_like(phix), create_graph=True)[0][:,0:1]
-    phiyy = torch.autograd.grad(phiy, xyz, torch.ones_like(phiy), create_graph=True)[0][:,1:2]
-    phizz = torch.autograd.grad(phiz, xyz, torch.ones_like(phiz), create_graph=True)[0][:,2:3]
+    phixx = torch.autograd.grad(
+        phix, xyz, torch.ones_like(phix), create_graph=True,
+    )[0][:,0:1]
+    phiyy = torch.autograd.grad(
+        phiy, xyz, torch.ones_like(phiy), create_graph=True,
+    )[0][:,1:2]
+    phizz = torch.autograd.grad(
+        phiz, xyz, torch.ones_like(phiz), create_graph=True,
+    )[0][:,2:3]
 
     return phixx + phiyy + phizz
 
@@ -361,7 +403,10 @@ if resume_training:  # If you're resuming training
     initial_lr = 1e-6
     gamma = (target_lr / initial_lr) ** (1 / n_iterations)  # Decay factor per iteration
 
-    checkpoint = torch.load("trained_model_checkpoint.pth", map_location=device)
+    checkpoint = torch.load(
+        "trained_model_checkpoint.pth",
+        map_location=device,
+    )
 
     # Recreate the model, optimizer, and scheduler
     model = PINN().to(device)
@@ -392,7 +437,9 @@ for it in range(start_iteration, n_iterations):
     # Boundary loss: match H = -∇Φ on z=0
     xyz_b1.requires_grad_(True)
     phi_b1 = model(xyz_b1)
-    grad_b1 = torch.autograd.grad(phi_b1, xyz_b1, torch.ones_like(phi_b1), create_graph=True)[0]
+    grad_b1 = torch.autograd.grad(
+        phi_b1, xyz_b1, torch.ones_like(phi_b1), create_graph=True,
+    )[0]
     H_pred_b1 = -grad_b1
     loss_bc1 = torch.mean((H_pred_b1 - H_true_b1)**2) / (torch.mean(torch.abs(H_true_b1)) + 1e-6)
 
@@ -421,7 +468,7 @@ for it in range(start_iteration, n_iterations):
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
             'scheduler_state_dict': scheduler.state_dict(),
-            'iteration': it
+            'iteration': it,
         }, "trained_model_checkpoint.pth")
         print(f"Checkpoint saved at iteration {it}.")
 
@@ -497,5 +544,3 @@ plt.colorbar()
 plt.tight_layout()
 plt.savefig('../Outputs/example_new.png')
 plt.show()
-
-
