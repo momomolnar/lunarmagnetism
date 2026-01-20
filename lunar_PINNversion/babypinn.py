@@ -30,26 +30,21 @@ class PositionalEncoding(nn.Module):
 def create_collocation_data(x_c, y_c, z_c):
     return torch.tensor(np.hstack([x_c, y_c, z_c]), requires_grad=True, dtype=torch.float32)
 
-
 def create_boundary_data_pts(x_b, y_b, z_b):
     bc_pts = torch.tensor(np.hstack([x_b, y_b, z_b]), requires_grad=True, dtype=torch.float32)
     return bc_pts
-
 
 def create_boundary_data(B_bc_vals):
     bc_vals = torch.tensor(B_bc_vals, dtype=torch.float32, requires_grad=True)
     return bc_vals
 
-
 def colloc_data_loader(colloc_data, batch_size=32):
     dataset = TensorDataset(colloc_data)
     return DataLoader(dataset, batch_size=batch_size, shuffle=False)
 
-
 def boundary_data_loader(bc_vals, batch_size=32):
     dataset = TensorDataset(bc_vals)
     return DataLoader(dataset, batch_size=batch_size, shuffle=False)
-
 
 def create_dataloaders(h=1.0, N_colloc=10000, N_bc=4096, batch_size=4096):
     x_c, y_c, z_c, x_b, y_b, z_b, B_bc_vals = create_synthetic_set(h, N_colloc, N_bc)
@@ -65,13 +60,11 @@ def create_dataloaders(h=1.0, N_colloc=10000, N_bc=4096, batch_size=4096):
 
     return colloc_data, bc_pts, bc_vals
 
-
 def true_phi(x, y, z, kx=4, ky=4):
     kz = np.sqrt(kx**2 + ky**2)
     return np.exp(kz * z) * np.sin(kx * x) * np.cos(ky * y)
 
-
-def true_B(x, y, z, kx=torch.tensor(4), ky=torch.tensor(4)):
+def true_B(x, y, z,  kx=torch.tensor(6), ky=torch.tensor(6)):
     kx = torch.tensor(kx)
     ky = torch.tensor(ky)
     kz = torch.sqrt((kx**2 + ky**2))
@@ -81,10 +74,9 @@ def true_B(x, y, z, kx=torch.tensor(4), ky=torch.tensor(4)):
 
     # Bx = By = Bz = np.ones_like((Bx))
 
-    return torch.stack([Bx / 16,
-                        By / 16,
-                        Bz / 16], axis=-1)
-
+    return torch.stack([Bx,
+                        By,
+                        Bz], axis=-1)
 
 def create_synthetic_set(h=1.0, N_colloc=3000, N_bc=10000):
     # Collocation points
@@ -110,6 +102,11 @@ class PINN(nn.Module):
         self.positional_encoding = PositionalEncoding(num_freqs, input_size, max_freq)
         self.hidden = nn.Sequential(
             nn.Linear(self.positional_encoding.d_output, hidden_size),
+            # nn.Linear(input_size, hidden_size),
+            nn.Tanh(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.Tanh(),
+            nn.Linear(hidden_size, hidden_size),
             nn.Tanh(),
             nn.Linear(hidden_size, hidden_size),
             nn.Tanh(),
@@ -120,17 +117,31 @@ class PINN(nn.Module):
 
     def forward(self, x):
         x_encoded = self.positional_encoding(x)
+        # x_encoded = x
         return self.hidden(x_encoded)
 
 # Compute the Laplacian using automatic differentiation
 def compute_laplacian(model, inputs):
-    phi = model(inputs.requires_grad_(True))
-    grad_phi = torch.autograd.grad(outputs=phi, inputs=inputs, grad_outputs=torch.ones_like(phi),
-                                   create_graph=True)[0]
-    laplacian = sum(
-        [torch.autograd.grad(outputs=grad_phi[:, i], inputs=inputs, grad_outputs=torch.ones_like(grad_phi[:, i]),
-                             create_graph=True)[0][:, i] for i in range(3)])
-    return laplacian
+    # inputs should require grad
+    inputs = inputs.requires_grad_(True)
+    phi = model(inputs)                 # shape (N, 1)
+    # Sum second derivatives:
+    grads = torch.autograd.grad(outputs=phi, inputs=inputs,
+                                grad_outputs=torch.ones_like(phi),
+                                create_graph=True, retain_graph=True)[0]   # shape (N, 3)
+
+    # second derivatives for each input dim:
+    d2 = []
+    for i in range(inputs.shape[1]):
+        grad_i = grads[:, i:i+1]   # shape (N,1)
+        d2_i = torch.autograd.grad(outputs=grad_i, inputs=inputs,
+                                   grad_outputs=torch.ones_like(grad_i),
+                                   create_graph=True, retain_graph=True)[0][:, i:i+1]  # shape (N,1)
+        d2.append(d2_i)
+
+    lap = d2[0] + d2[1] + d2[2]   # shape (N,1)
+    laplacian_loss = torch.mean(lap ** 2)   # MSE of laplacian to zero
+    return laplacian_loss
 
 
 # Define the boundary condition loss function
@@ -140,8 +151,7 @@ def boundary_condition_loss(model, inputs, B_measured):
                                    create_graph=True)[0]
     B_pred = -1 * grad_phi
 
-    return torch.sum((B_measured - B_pred) ** 2)
-
+    return torch.mean((B_measured - B_pred) ** 2)
 
 # Training the PINN
 def train_pinn(model, x_inner, x_boundary, B_measured, epochs, lr,
@@ -153,7 +163,7 @@ def train_pinn(model, x_inner, x_boundary, B_measured, epochs, lr,
     # scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, "min")
     for epoch in range(epochs):
         optimizer.zero_grad()
-        laplacian_loss = lambda_domain * torch.mean(compute_laplacian(model, x_inner) ** 2)
+        laplacian_loss = lambda_domain * compute_laplacian(model, x_inner)
         boundary_loss = lambda_bc * boundary_condition_loss(model, x_boundary, B_measured)
         total_loss = laplacian_loss + boundary_loss
         total_loss.backward()
@@ -168,51 +178,54 @@ def train_pinn(model, x_inner, x_boundary, B_measured, epochs, lr,
 
 def evaluate_model(model, epoch):
     # Predict the potential and field after training
+
+    kx = ky = 4
     x_test = np.linspace(0, 1, 100)
     y_test = np.linspace(0, 1, 100)
     z_test = np.linspace(0, .75, 100)
     X, Y, Z = np.meshgrid(x_test, y_test, z_test)
-    test_points = torch.tensor(np.vstack([X.ravel(), Y.ravel(), Z.ravel()]).T, dtype=torch.float32,
-                               requires_grad=True).to(device)
+    test_points = torch.tensor(np.vstack([X.ravel(), Y.ravel(), Z.ravel()]).T,
+                               dtype=torch.float32, requires_grad=True).to(device)
     # Example usage
 
     phi_pred = model(test_points)
-    grad_phi = torch.autograd.grad(outputs=phi_pred, inputs=test_points, grad_outputs=torch.ones_like(phi_pred),
-                                   create_graph=True)[0]
+    grad_phi = torch.autograd.grad(outputs=phi_pred, inputs=test_points,
+                                   grad_outputs=torch.ones_like(phi_pred),
+                                   create_graph=False)[0]
 
     B_pred = (-1 * grad_phi).cpu().detach().numpy()
 
-    fig, ax = pl.subplots(1, 3)
+    fig, ax = pl.subplots(1, 3, figsize=(6, 2))
 
     im1 = ax[0].imshow(B_pred[..., 0].reshape(100, 100, 100)[:, :, 0], cmap='seismic')
     ax[0].set_title("B_pred from PINN")
-    pl.colorbar(im1)
+    pl.colorbar(im1, shrink=0.4)
 
-    B_tru = true_B(X, Y, Z, kx =16, ky=16)
+    B_tru = true_B(X, Y, Z, kx =kx, ky=ky)
     print(B_tru.shape)
     ax[1].set_title("B true")
     im1 = ax[1].imshow(B_tru[:, :, :, 0].reshape(100, 100, 100)[:, :, 0], cmap='seismic')
-    pl.colorbar(im1)
+    pl.colorbar(im1, shrink=0.4)
 
     ax[2].set_title("$\\delta$B")
     deltaB_B = (torch.tensor(B_pred[..., 0]).reshape(100, 100, 100)[:, :, 0]
                 - torch.tensor(B_tru[:, :, :, 0]).reshape(100, 100, 100)[:, :, 0]) / torch.tensor(
         B_tru[:, :, :, 0]).reshape(100, 100, 100)[:, :, 0]
     im1 = ax[2].imshow(deltaB_B, cmap='seismic', vmin=-0.1, vmax=0.1)
-    pl.colorbar(im1)
+    pl.colorbar(im1, shrink=0.4)
     pl.tight_layout()
-    pl.savefig(f"pred_{epoch}.png")
+    pl.savefig(f"/home/memolnar/Projects/lunarmagnetism/Outputs/test_cart_data/pred_{epoch}.png")
     pl.show()
     pl.close()
 
 
-    fig, ax = pl.subplots(1, 3)
+    fig, ax = pl.subplots(1, 3, figsize=(6, 2))
     ind = 20
     im1 = ax[0].imshow(B_pred[..., 0].reshape(100, 100, 100)[:, :, -1], cmap='seismic')
     ax[0].set_title("B_pred from PINN @ z = 1")
     pl.colorbar(im1)
 
-    B_tru = true_B(X, Y, Z, kx = 16, ky=16)
+    B_tru = true_B(X, Y, Z, kx = kx, ky=ky)
     print(B_tru.shape)
     ax[1].set_title("B true @ z = 1")
     im1 = ax[1].imshow(B_tru[:, :, :, 0].reshape(100, 100, 100)[:, :, -1], cmap='seismic')
@@ -225,7 +238,7 @@ def evaluate_model(model, epoch):
     im1 = ax[2].imshow(deltaB_B, cmap='seismic', vmin=-0.1, vmax=0.1)
     pl.colorbar(im1)
     pl.tight_layout()
-    pl.savefig(f"eval_{epoch:d}.png")
+    pl.savefig(f"/home/memolnar/Projects/lunarmagnetism/Outputs/test_cart_data/eval_{epoch:d}.png")
     pl.show()
     pl.close()
 
@@ -235,19 +248,24 @@ num_freqs = 6  # Number of frequencies for positional encoding
 max_freq = 1
 input_size = 3  # for (x, y, z) coordinates
 output_size = 1  # for the scalar magnetic potential
+z_loc = .5
 
 pinn = PINN(input_size, hidden_size, output_size, num_freqs, max_freq)
 pinn = pinn.to(device)
 
-domain = torch.tensor(np.random.rand(20000, 3), dtype=torch.float32).to(
+domain = torch.tensor(np.random.rand(5000, 3), dtype=torch.float32).to(
     device)  # Random points inside the domain [0, 1]^3
-domain[:, -1] = domain[:, -1] / 4 * 3
+domain[:, -1] = domain[:, -1] * z_loc
 
 boundary_points = torch.tensor(np.random.rand(1000, 3), dtype=torch.float32).to(device)
-boundary_points[:, 2] = .75  # Points on the face z = 0
+boundary_points[:, -1] = z_loc  # Points on the face z = constant
 
-B_measured = some_measured_B_on_boundary(boundary_points)
 
-train_pinn(pinn, domain, boundary_points, B_measured, epochs=100000, lr=2e-2,
-           lambda_bc=1.0, lambda_domain=10, period_eval=4000,
-           step_size=2000, gamma=0.8)
+B_measured = true_B(boundary_points[:, 0],
+                    boundary_points[:, 1],
+                    boundary_points[:, 2])
+
+train_pinn(pinn, domain, boundary_points, B_measured,
+           epochs=100000, lr=5e-3,
+           lambda_bc=1.0, lambda_domain=1, period_eval=4000,
+           step_size=1000, gamma=.98)
