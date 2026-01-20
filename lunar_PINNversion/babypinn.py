@@ -233,7 +233,11 @@ def train_pinn(
         if epoch % period_log == 0:
             current_lr = optimizer.param_groups[0]['lr']
             print(
-                f'Epoch {epoch}, Total Loss: {total_loss.item():.3e}, Laplacian Loss: {laplacian_loss.item():.3e}, Boundary Loss: {boundary_loss.item():.3e}, LR: {current_lr:.3e}')
+                f"Epoch {epoch}, Total Loss: {total_loss.item():.3e}, "
+                f"Laplacian Loss: {laplacian_loss.item():.3e}, "
+                f"Boundary Loss: {boundary_loss.item():.3e}, "
+                f"LR: {current_lr:.3e}"
+            )
         if epoch % period_eval == 0:
             evaluate_model(model, epoch)
         scheduler.step()  # Update the learning rate at the end of each epoch
