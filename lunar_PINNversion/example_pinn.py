@@ -458,9 +458,11 @@ for it in range(start_iteration, n_iterations):
     optimizer.zero_grad()
     if it % 500 == 0:
         current_lr = optimizer.param_groups[0]["lr"]
-        print(f"iter {it}, loss = {loss.item():.4e}, PDE={loss_pde.item():.4e}, ",
-              f"BC1={loss_bc1.item():.4e}, BC2={loss_bc2.item():.4e}, ",
-              f"LR={current_lr:.1e}")
+        print(
+            f"iter {it}, loss = {loss.item():.4e}, PDE={loss_pde.item():.4e}, ",
+            f"BC1={loss_bc1.item():.4e}, BC2={loss_bc2.item():.4e}, ",
+            f"LR={current_lr:.1e}",
+        )
 
     # Save a checkpoint every 5000 iterations
     if it > 0 and it % 5000 == 0:

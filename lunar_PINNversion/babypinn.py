@@ -282,9 +282,9 @@ def evaluate_model(model, epoch):
     im1 = ax[2].imshow(deltaB_B, cmap='seismic', vmin=-0.1, vmax=0.1)
     pl.colorbar(im1, shrink=0.4)
     pl.tight_layout()
-    pl.savefig(f"/home/memolnar/Projects/lunarmagnetism/Outputs/test_cart_data/pred_{epoch}.png")
-    pl.show()
-    pl.close()
+    pl.savefig(f"./pred_{epoch}.png")
+    # pl.show()
+    # pl.close()
 
 
     fig, ax = pl.subplots(1, 3, figsize=(6, 2))
@@ -308,9 +308,9 @@ def evaluate_model(model, epoch):
     im1 = ax[2].imshow(deltaB_B, cmap='seismic', vmin=-0.1, vmax=0.1)
     pl.colorbar(im1)
     pl.tight_layout()
-    pl.savefig(f"/home/memolnar/Projects/lunarmagnetism/Outputs/test_cart_data/eval_{epoch:d}.png")
-    pl.show()
-    pl.close()
+    pl.savefig(f"./eval_{epoch:d}.png")
+    # pl.show()
+    # pl.close()
 
 # Training script configuration
 hidden_size = 128
@@ -329,7 +329,6 @@ domain[:, -1] = domain[:, -1] * z_loc
 
 boundary_points = torch.tensor(np.random.rand(1000, 3), dtype=torch.float32).to(device)
 boundary_points[:, -1] = z_loc  # Points on the face z = constant
-
 
 B_measured = true_B(boundary_points[:, 0],
                     boundary_points[:, 1],
