@@ -18,7 +18,10 @@ class PositionalEncoding(nn.Module):
     def __init__(self, num_freqs, d_input, max_freq=8):
         super().__init__()
         frequencies = 2 ** torch.linspace(0, max_freq, num_freqs)
-        self.frequencies = nn.Parameter(frequencies[None, :, None], requires_grad=False)
+        self.frequencies = nn.Parameter(
+            frequencies[None, :, None],
+            requires_grad=False,
+        )
         self.d_output = d_input * (num_freqs * 2)
 
     def forward(self, x):
@@ -28,10 +31,18 @@ class PositionalEncoding(nn.Module):
         return encoded
 
 def create_collocation_data(x_c, y_c, z_c):
-    return torch.tensor(np.hstack([x_c, y_c, z_c]), requires_grad=True, dtype=torch.float32)
+    return torch.tensor(
+        np.hstack([x_c, y_c, z_c]),
+        requires_grad=True,
+        dtype=torch.float32,
+    )
 
 def create_boundary_data_pts(x_b, y_b, z_b):
-    bc_pts = torch.tensor(np.hstack([x_b, y_b, z_b]), requires_grad=True, dtype=torch.float32)
+    bc_pts = torch.tensor(
+        np.hstack([x_b, y_b, z_b]),
+        requires_grad=True,
+        dtype=torch.float32,
+    )
     return bc_pts
 
 def create_boundary_data(B_bc_vals):
@@ -47,7 +58,11 @@ def boundary_data_loader(bc_vals, batch_size=32):
     return DataLoader(dataset, batch_size=batch_size, shuffle=False)
 
 def create_dataloaders(h=1.0, N_colloc=10000, N_bc=4096, batch_size=4096):
-    x_c, y_c, z_c, x_b, y_b, z_b, B_bc_vals = create_synthetic_set(h, N_colloc, N_bc)
+    (
+        x_c, y_c, z_c,
+        x_b, y_b, z_b,
+        B_bc_vals,
+    ) = create_synthetic_set(h, N_colloc, N_bc)
 
     colloc_data = create_collocation_data(x_c, y_c, z_c)
     train_colloc_loader = colloc_data_loader(colloc_data, batch_size=batch_size)
