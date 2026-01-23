@@ -14,7 +14,6 @@ from torch.utils.data import DataLoader, TensorDataset
 import matplotlib.pyplot as pl
 
 class PositionalEncoding(nn.Module):
-
     def __init__(self, num_freqs, d_input, max_freq=8):
         super().__init__()
         frequencies = 2 ** torch.linspace(0, max_freq, num_freqs)
@@ -37,12 +36,17 @@ def create_collocation_data(x_c, y_c, z_c):
         dtype=torch.float32,
     )
 
-def create_boundary_data_pts(x_b, y_b, z_b):
+# CHANGES: changed np.hstack to np.vstack, take .T of torch.tensor
+def create_boundary_data_pts(
+    x_b: torch.Tensor,
+    y_b: torch.Tensor,
+    z_b: torch.Tensor,
+) -> torch.Tensor:
     bc_pts = torch.tensor(
-        np.hstack([x_b, y_b, z_b]),
+        np.vstack([x_b, y_b, z_b]),
         requires_grad=True,
         dtype=torch.float32,
-    )
+    ).T
     return bc_pts
 
 def create_boundary_data(B_bc_vals):
@@ -57,7 +61,12 @@ def boundary_data_loader(bc_vals, batch_size=32):
     dataset = TensorDataset(bc_vals)
     return DataLoader(dataset, batch_size=batch_size, shuffle=False)
 
-def create_dataloaders(h=1.0, N_colloc=10000, N_bc=4096, batch_size=4096):
+def create_dataloaders(
+    h=1.0,
+    N_colloc=10000,
+    N_bc=4096,
+    batch_size=4096,
+):
     (
         x_c, y_c, z_c,
         x_b, y_b, z_b,
@@ -181,6 +190,7 @@ def compute_laplacian(model, inputs):
 # Define the boundary condition loss function
 def boundary_condition_loss(model, inputs, B_measured):
     phi = model(inputs.requires_grad_(True))
+
     grad_phi = torch.autograd.grad(
         outputs=phi,
         inputs=inputs,
