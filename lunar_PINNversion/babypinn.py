@@ -65,13 +65,22 @@ def create_dataloaders(h=1.0, N_colloc=10000, N_bc=4096, batch_size=4096):
     ) = create_synthetic_set(h, N_colloc, N_bc)
 
     colloc_data = create_collocation_data(x_c, y_c, z_c)
-    train_colloc_loader = colloc_data_loader(colloc_data, batch_size=batch_size)
+    train_colloc_loader = colloc_data_loader(
+        colloc_data,
+        batch_size=batch_size,
+    )
 
     bc_pts = create_boundary_data_pts(x_b, y_b, z_b)
-    train_boundary_loader_pts = boundary_data_loader(bc_pts, batch_size=batch_size)
+    train_boundary_loader_pts = boundary_data_loader(
+        bc_pts,
+        batch_size=batch_size,
+    )
 
     bc_vals = create_boundary_data(B_bc_vals)
-    train_boundary_loader = boundary_data_loader(bc_vals, batch_size=batch_size)
+    train_boundary_loader = boundary_data_loader(
+        bc_vals,
+        batch_size=batch_size,
+    )
 
     return colloc_data, bc_pts, bc_vals
 
@@ -79,7 +88,7 @@ def true_phi(x, y, z, kx=4, ky=4):
     kz = np.sqrt(kx**2 + ky**2)
     return np.exp(kz * z) * np.sin(kx * x) * np.cos(ky * y)
 
-def true_B(x, y, z,  kx=torch.tensor(6), ky=torch.tensor(6)):
+def true_B(x, y, z, kx=torch.tensor(4), ky=torch.tensor(4)):
     kx = torch.tensor(kx)
     ky = torch.tensor(ky)
     kz = torch.sqrt((kx**2 + ky**2))
@@ -112,9 +121,20 @@ def create_synthetic_set(h=1.0, N_colloc=3000, N_bc=10000):
 
 # Define the neural network model
 class PINN(nn.Module):
-    def __init__(self, input_size, hidden_size, output_size, num_freqs, max_freq=8):
+    def __init__(
+        self,
+        input_size,
+        hidden_size,
+        output_size,
+        num_freqs,
+        max_freq=8,
+    ):
         super(PINN, self).__init__()
-        self.positional_encoding = PositionalEncoding(num_freqs, input_size, max_freq)
+        self.positional_encoding = PositionalEncoding(
+            num_freqs,
+            input_size,
+            max_freq,
+        )
         self.hidden = nn.Sequential(
             nn.Linear(self.positional_encoding.d_output, hidden_size),
             # nn.Linear(input_size, hidden_size),
@@ -127,7 +147,7 @@ class PINN(nn.Module):
             nn.Tanh(),
             nn.Linear(hidden_size, hidden_size),
             nn.Tanh(),
-            nn.Linear(hidden_size, output_size)
+            nn.Linear(hidden_size, output_size),
         )
 
     def forward(self, x):
@@ -158,23 +178,40 @@ def compute_laplacian(model, inputs):
     laplacian_loss = torch.mean(lap ** 2)   # MSE of laplacian to zero
     return laplacian_loss
 
-
 # Define the boundary condition loss function
 def boundary_condition_loss(model, inputs, B_measured):
     phi = model(inputs.requires_grad_(True))
-    grad_phi = torch.autograd.grad(outputs=phi, inputs=inputs, grad_outputs=torch.ones_like(phi),
-                                   create_graph=True)[0]
+    grad_phi = torch.autograd.grad(
+        outputs=phi,
+        inputs=inputs,
+        grad_outputs=torch.ones_like(phi),
+        create_graph=True,
+    )[0]
     B_pred = -1 * grad_phi
 
     return torch.mean((B_measured - B_pred) ** 2)
 
 # Training the PINN
-def train_pinn(model, x_inner, x_boundary, B_measured, epochs, lr,
-               lambda_domain=1, lambda_bc=1, period_log=1000, period_eval=5000,
-               step_size=1000, gamma=0.95):
+def train_pinn(
+    model,
+    x_inner,
+    x_boundary,
+    B_measured,
+    epochs,
+    lr,
+    lambda_domain=1,
+    lambda_bc=1,
+    period_log=1000,
+    period_eval=5000,
+    step_size=1000,
+    gamma=0.95,
+):
     optimizer = optim.Adam(model.parameters(), lr=lr)
-    scheduler = optim.lr_scheduler.StepLR(optimizer,
-                                          step_size=step_size, gamma=gamma)  # Example scheduler
+    scheduler = optim.lr_scheduler.StepLR(
+        optimizer,
+        step_size=step_size,
+        gamma=gamma,
+    )  # Example scheduler
     # scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, "min")
     for epoch in range(epochs):
         optimizer.zero_grad()
@@ -223,9 +260,11 @@ def evaluate_model(model, epoch):
     pl.colorbar(im1, shrink=0.4)
 
     ax[2].set_title("$\\delta$B")
-    deltaB_B = (torch.tensor(B_pred[..., 0]).reshape(100, 100, 100)[:, :, 0]
-                - torch.tensor(B_tru[:, :, :, 0]).reshape(100, 100, 100)[:, :, 0]) / torch.tensor(
-        B_tru[:, :, :, 0]).reshape(100, 100, 100)[:, :, 0]
+    deltaB_B = (
+        torch.tensor(B_pred[..., 0]).reshape(100, 100, 100)[:, :, 0]
+        - torch.tensor(B_tru[:, :, :, 0]).reshape(100, 100, 100)[:, :, 0]
+    ) / torch.tensor(B_tru[:, :, :, 0]).reshape(100, 100, 100)[:, :, 0]
+
     im1 = ax[2].imshow(deltaB_B, cmap='seismic', vmin=-0.1, vmax=0.1)
     pl.colorbar(im1, shrink=0.4)
     pl.tight_layout()
@@ -247,9 +286,11 @@ def evaluate_model(model, epoch):
     pl.colorbar(im1)
 
     ax[2].set_title("$\\delta$B @ z = 1")
-    deltaB_B = (torch.tensor(B_pred[..., 0]).reshape(100, 100, 100)[:, :, -1]
-                - torch.tensor(B_tru[:, :, :, 0]).reshape(100, 100, 100)[:, :, -1]) / torch.tensor(
-        B_tru[:, :, :, 0]).reshape(100, 100, 100)[:, :, -1]
+    deltaB_B = (
+        torch.tensor(B_pred[..., 0]).reshape(100, 100, 100)[:, :, -1]
+        - torch.tensor(B_tru[:, :, :, 0]).reshape(100, 100, 100)[:, :, -1]
+    ) / torch.tensor(B_tru[:, :, :, 0]).reshape(100, 100, 100)[:, :, -1]
+
     im1 = ax[2].imshow(deltaB_B, cmap='seismic', vmin=-0.1, vmax=0.1)
     pl.colorbar(im1)
     pl.tight_layout()
