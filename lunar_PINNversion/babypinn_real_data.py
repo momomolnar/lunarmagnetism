@@ -4,12 +4,12 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 import matplotlib.pyplot as pl
-from lunar_PINNversion.model import PINN
-from lunar_PINNversion.dataloader.dataLoader import (
+from model import PINN
+from dataloader.dataLoader import (
     Lunar_data_loader,
     Lunar_surface_data_loader,
 )
-from lunar_PINNversion.dataloader.util import spherical_to_cartesian
+from dataloader.util import spherical_to_cartesian
 # import wandb
 
 if torch.cuda.is_available():
@@ -124,5 +124,5 @@ pinn.train_pinn(
     batch_size=65536,
     checkpoint_every=1000,  # Save checkpoint every N epochs
     resume_from=None,  # Path to checkpoint to resume from
-    output_dir = "./babypinn_v2_output/",
+    output_dir = "./babypinn_real_data_output",
 )
