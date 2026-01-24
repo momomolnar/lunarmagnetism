@@ -1,5 +1,5 @@
 import numpy as np
-from lunar_PINNversion.dataloader.util import spherical_vector_to_cartesian, spherical_to_cartesian
+from dataloader.util import spherical_vector_to_cartesian, spherical_to_cartesian
 
 class Generic_data_loader():
 
