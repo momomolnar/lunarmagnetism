@@ -316,7 +316,7 @@ def plot_three_component_mollweide(lon, lat, B_x, B_y, B_z,
 def plot_four_component_mollweide(lon, lat, B_x, B_y, B_z, B_w,
                                   output_file='four_component_map.png',
                                   cnorm='symlog',
-                                  figsize=(16, 32),
+                                  figsize=(16, 32), vlims = [1e-2, 5],
                                   titles=None,
                                   cbar_label="B field [nTesla]",
                                   share_colorbar=False):
@@ -384,8 +384,8 @@ def plot_four_component_mollweide(lon, lat, B_x, B_y, B_z, B_w,
 
         # Determine color limits
         if not share_colorbar:
-            vmin = -5  # np.nanquantile(all_data, 0.05)
-            vmax = 5  # np.nanquantile(all_data, 0.95)
+            vmin = -vlims[1]  # np.nanquantile(all_data, 0.05)
+            vmax = vlims[1]  # np.nanquantile(all_data, 0.95)
 
         # Plot with appropriate normalization
         if ax == axes[-1]:
@@ -398,8 +398,8 @@ def plot_four_component_mollweide(lon, lat, B_x, B_y, B_z, B_w,
                 rasterized=True,
 
                 norm=colors.LogNorm(
-                    vmin=1e-2,
-                    vmax=5)
+                    vmin=vlims[0],
+                    vmax=vlims[1])
             )
         elif cnorm == 'symlog':
             im = ax.scatter(
@@ -410,10 +410,134 @@ def plot_four_component_mollweide(lon, lat, B_x, B_y, B_z, B_w,
                 cmap=cmc.vik,
                 rasterized=True,
                 norm=colors.SymLogNorm(
-                    linthresh=1e-2,
-                    linscale=1e-2,
-                    vmin=vmin,
-                    vmax=vmax,
+                    linthresh=vlims[0],
+                    linscale=vlims[0],
+                    vmin=-vlims[1],
+                    vmax=vlims[1],
+                    base=10
+                )
+            )
+
+
+        ax.grid(True)
+        ax.set_xlabel("Longitude")
+        ax.set_ylabel("Latitude")
+        ax.set_title(title, fontsize=16, pad=10)
+        ax.xaxis.set_ticks_position('bottom')
+        ax.xaxis.set_label_position('bottom')
+        ims.append(im)
+
+        # Add individual colorbar if not sharing
+        if not share_colorbar:
+            cbar = plt.colorbar(im, ax=ax, orientation="horizontal",
+                                pad=0.15, label=cbar_label)
+
+    # Add shared colorbar if requested
+    if share_colorbar:
+        # Add colorbar spanning all four subplots
+        cbar = fig.colorbar(ims[0], ax=axes, orientation="horizontal",
+                            pad=0.05, label=cbar_label,
+                            fraction=0.046, aspect=40)
+    plt.savefig(output_file, dpi=150, bbox_inches='tight')
+    plt.close()
+
+    return fig, axes, ims
+
+def plot_ER_data_mollweide(lon, lat, B_sc, B_alpha, B_z, B_w,
+                            output_file='four_component_map.png',
+                            cnorm='symlog',
+                                  figsize=(16, 32), vlims = [1e-2, 5],
+                                  titles=None,
+                                  cbar_label="B field [nTesla]",
+                                  share_colorbar=False):
+    """
+    Plot four magnetic field components on Mollweide projection in 4x1 grid.
+
+    Parameters:
+    -----------
+    lon : array-like
+        Longitude values in [-pi, pi]
+    lat : array-like
+        Latitude values
+    B_x, B_y, B_z, B_w : array-like
+        Four magnetic field components
+    output_file : str
+        Output filename
+    cnorm : str, optional
+        'symlog' for symmetric log normalization
+    figsize : tuple
+        Figure size (width, height)
+    titles : list of str, optional
+        Custom titles for each subplot. Default: ['$B_x$', '$B_y$', '$B_z$', '$B_w$']
+    cbar_label : str
+        Label for colorbar
+    share_colorbar : bool
+        If True, use one colorbar for all four plots with shared scale.
+        If False, each plot gets its own colorbar.
+
+    Returns:
+    --------
+    fig : matplotlib figure
+    axes : list of axes
+    ims : list of scatter plot objects
+    """
+
+    # Default titles
+    if titles is None:
+        titles = ['$B_{sc}$', '$\\alpha_{sc}$',
+                  '$B_{total}$']
+
+    # Create figure with GridSpec
+    fig = plt.figure(figsize=figsize)
+    gs = GridSpec(100, 100, figure=fig, hspace=0.3,
+                  wspace=0.1)
+
+    # Create axes with Mollweide projection
+    axes = []
+    for i in range(4):
+        ax = fig.add_subplot(gs[(i //2)*50:(i //2)*50 + 45,
+                                 i%2*50:(i%2)*50+45],
+                             projection="mollweide")
+        axes.append(ax)
+
+    # Data to plot
+    ims = []
+
+    # Plot each component
+    for ax, B_field, title in zip(axes, B_fields, titles):
+
+        # Determine color limits
+        if not share_colorbar:
+            vmin = -vlims[1]  # np.nanquantile(all_data, 0.05)
+            vmax = vlims[1]  # np.nanquantile(all_data, 0.95)
+
+        # Plot with appropriate normalization
+        if ax == axes[-1]:
+            im = ax.scatter(
+                lon,
+                lat,
+                c=B_field,
+                s=1,
+                cmap=cmc.oslo,
+                rasterized=True,
+
+                norm=colors.LogNorm(
+                    vmin=vlims[0],
+                    vmax=vlims[1])
+            )
+        elif cnorm == 'symlog':
+            im = ax.scatter(
+                lon,
+                lat,
+                c=B_field,
+                s=1,
+                cmap=cmc.vik,
+                rasterized=True,
+                norm=colors.SymLogNorm(
+                    linthresh=vlims[0],
+                    linscale=vlims[0],
+                    vmin=-vlims[1],
+                    vmax=vlims[1],
                     base=10
                 )
             )

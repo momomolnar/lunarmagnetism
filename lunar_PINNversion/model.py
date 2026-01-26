@@ -1,13 +1,9 @@
 import os
-from cgi import nolog
 
 import torch.nn as nn
 import torch.optim as optim
 from tqdm import tqdm
-import time
-from matplotlib.gridspec import GridSpec
 from torch.utils.data import DataLoader, TensorDataset
-import matplotlib.pyplot as pl
 import torch
 import math
 from torch.cuda.amp import autocast, GradScaler
@@ -15,6 +11,7 @@ import numpy as np
 from torch.optim.lr_scheduler import ExponentialLR
 from lunar_PINNversion.evaluation.mollweide_plot import plot_three_component_mollweide, plot_four_component_mollweide
 from lunar_PINNversion.dataloader.util import spherical_to_cartesian
+import wandb
 
 R_lunar = 1737e3 # m
 
@@ -631,6 +628,21 @@ class PINN(nn.Module):
         start_epoch = 0
         best_loss = float('inf')
 
+        wandb.init(
+            project="lunar-pinn",
+            name=f"SIREN_hidden{self.hparams['hidden_dim']}_layers{self.hparams['num_hidden_layers']}",
+            config={
+                **self.hparams,
+                "lambda_bc": lambda_bc,
+                "lambda_domain": lambda_domain,
+                "initial_lr": initial_lr,
+                "target_lr": target_lr,
+                "batch_size": batch_size,
+                "use_amp": use_amp,
+            },
+            resume="allow" if resume_from is not None else False,
+        )
+
         if resume_from is not None and os.path.exists(resume_from):
             print(f"Resuming training from {resume_from}")
             _, checkpoint = self.load_checkpoint(resume_from, self.device)
@@ -669,14 +681,13 @@ class PINN(nn.Module):
         epoch_bar = tqdm(range(epochs), desc="Training", unit="epoch")
 
         for epoch in epoch_bar:
-            lambda_domain = min(1.0, epoch / 100000)
-            pde_start_epoch = 600
+            pde_start_epoch = 100
             if epoch < pde_start_epoch:
                 lambda_surface = 0
                 lambda_domain = 0
 
             else:
-                lambda_domain = min(1.0, epoch / 1000000)
+                lambda_domain = min(1.0, epoch / 1e5)
                 lambda_surface = lambda_domain / 1e3
             # Resample boundary data periodically
             if epoch % resample_boundary_every == 0 and boundary_points_full is not None:
@@ -695,8 +706,6 @@ class PINN(nn.Module):
             epoch_losses = {'bc': 0.0, 'pde': 0.0, 'surf':0}
             n_iters = 0
 
-            # ✅ BEST: Use zip - clean and efficient
-            # Automatically stops when shortest loader is exhausted
             for (x_bc, B_bc), (x_inner,), (x_surface, B_surface) in zip(boundary_loader, inner_loader, surface_loader):
                 optimizer.zero_grad()
 
@@ -735,7 +744,17 @@ class PINN(nn.Module):
                 epoch_losses['surf'] += surface_loss.item()
 
                 n_iters += 1
-
+            wandb.log({
+                "epoch": epoch,
+                "loss/bc": bc_loss,
+                "loss/pde": pde_loss,
+                "loss/surface": surface_loss,
+                "loss/total": total_loss,
+                "lambda/domain": lambda_domain,
+                "lambda/surface": lambda_surface,
+                "lambda/bc": lambda_bc,
+                "lr": optimizer.param_groups[0]['lr'],
+            })
             scheduler.step()
 
 
@@ -780,6 +799,15 @@ class PINN(nn.Module):
         # Predict the potential and field after training
         self.plot_B_eval(epoch, lunar_data, output_dir)
 
+        wandb.log({
+            "eval/surface_B": wandb.Image(f"{output_dir}/eval_surface_{epoch:d}.png"),
+            "eval/BC_B": wandb.Image(f"{output_dir}/eval_BC_{epoch:d}.png"),
+        })
+
+        if epoch == 0:
+            wandb.log({
+                "eval/true_BC": wandb.Image(f"{output_dir}/true_BC_{epoch:d}.png")
+            })
     def plot_B_eval(self, epoch, lunar_data, output_dir,
                     num_pts=400, height_obs=1e5):
 
