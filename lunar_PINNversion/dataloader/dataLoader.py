@@ -52,7 +52,7 @@ class Lunar_surface_ER_data_loader(Lunar_surface_data_loader):
     def __init__(self, filename):
         self.filename = filename
         self.__read_LRO_data__()
-        self.R_lunar = 1730e3
+        self.R_lunar = 1737e3
         self.transform_spherical_to_cartesian()
 
 
