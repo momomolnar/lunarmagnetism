@@ -16,7 +16,7 @@ This repository contains a flexible, modular framework for performing **physics-
 ---
 
 ## Codebase Structure
-
+```text 
 .
 ├── inversion.py                   # Main inversion pipeline using YAML config
 ├── data_loader_dispatcher.py      # Dispatches custom logic for each data type/source
@@ -29,7 +29,7 @@ This repository contains a flexible, modular framework for performing **physics-
 │   └── your_config.yaml           # Example YAML configs for running inversions
 ├── run_inversion.sh               # Shell script to run one or more batch experiments
 └── README.txt                     # You are here
-
+```
 ---
 
 ## Getting Started
