@@ -53,6 +53,7 @@ pip install torch numpy pyyaml matplotlib tqdm wandb
 
 Example (experiments/my_lunar_inv.yaml):
 
+```text
 device: "cuda"
 output_dir: "./Outputs/exp1/"
 R_lunar: 1737e3
@@ -95,7 +96,7 @@ train:
   target_lr: 1e-6
   checkpoint_every: 1000
   period_eval: 200
-
+```
 > See the experiments/ folder for more samples.
 
 ---
