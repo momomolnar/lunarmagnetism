@@ -1,0 +1,46 @@
+device: "cuda"
+output_dir: "./Outputs/exp1/"
+R_lunar: 1737e3
+batch_size: 65536
+
+data:
+  orbital:
+    - path: "/data/Moon_Mag_100km_LRO.txt"
+      source: "LRO"
+    - path: "/data/Moon_Mag_100km_Kaguya.txt"
+      source: "Kaguya"
+  surface_amplitude:
+    - path: "/data/surface_amp_Apollo.txt"
+      source: "Apollo"
+    - path: "/data/surface_amp_LRO.txt"
+      source: "LRO"
+  surface_vector:
+    - path: "/data/surface_vec_Apollo.txt"
+      source: "Apollo"
+    - path: "/data/surface_vec_MagROVER.txt"
+      source: "MagROVER"
+
+collocation:
+  n_points: 100000
+  r_offset: 0
+
+model:
+  w0_initial: 20
+  w0: 15
+  pe_num_freqs: 6
+  base_freq: 1.4
+  hidden_dim: 128
+  num_hidden_layers: 5
+
+train:
+  epochs: 15000
+  lambda_bc: 10.0
+  lambda_domain: 1.0
+  n_boundary_samples: 100000
+  n_colloc_samples: 100000
+  resample_boundary_every: 1000
+  resample_colloc_every: 1000
+  initial_lr: 1e-3
+  target_lr: 1e-6
+  checkpoint_every: 1000
+  period_eval: 200

@@ -169,7 +169,7 @@ class PINN(nn.Module):
 
         return laplacian
 
-    def compute_total_B_field_loss(self, inputs, B_measured_magntitude):
+    def compute_total_B_field_loss(self, inputs, B_measured_magnitude):
         phi = self(inputs.requires_grad_(True))
         grad_phi = torch.autograd.grad(outputs=phi, inputs=inputs,
                                        grad_outputs=torch.ones_like(phi),
@@ -179,7 +179,7 @@ class PINN(nn.Module):
                                       +B_pred[...,1]**2
                                       +B_pred[...,2]**2)
 
-        return torch.mean((B_measured_magntitude - B_pred_magnitude)**2)
+        return torch.mean((B_measured_magnitude - B_pred_magnitude)**2)
 
     def boundary_condition_loss(self, inputs, B_measured):
         phi = self(inputs.requires_grad_(True))
@@ -733,7 +733,7 @@ class PINN(nn.Module):
                         surface_loss = self.compute_total_B_field_loss(x_surface, B_surface)
                         lap = self.compute_laplacian(x_inner)
                         pde_loss = torch.mean(lap ** 2)
-                        total_loss = lambda_bc * bc_loss + lambda_domain * pde_loss + surface_loss  * lambda_surface
+                        total_loss = lambda_bc * bc_loss + lambda_domain * pde_loss + surface_loss * lambda_surface
 
                     total_loss.backward()
                     optimizer.step()

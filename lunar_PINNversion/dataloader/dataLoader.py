@@ -1,4 +1,5 @@
 import numpy as np
+import torch
 from lunar_PINNversion.dataloader.util import spherical_vector_to_cartesian, spherical_to_cartesian
 
 class Generic_data_loader():
@@ -98,3 +99,56 @@ class Lunar_surface_ER_data_loader(Lunar_surface_data_loader):
         # Debug information to verify shapes and contents
         print(f"Loaded data: theta.shape={self.theta.shape}, phi.shape={self.phi.shape}")
         print(f"B_sc.shape={self.B_sc.shape}, alpha_c.shape={self.alpha_c.shape}")
+
+def load_orbital_data(file_path, R_lunar, device):
+    # Load your specific orbital data here; this is schematic!
+    loader = Lunar_data_loader(filename=file_path)
+    pts = np.stack([loader.x_coord, loader.y_coord, loader.z_coord], axis=-1) / R_lunar
+    B = np.stack([loader.b_x, loader.b_y, loader.b_z], axis=-1)
+    return torch.tensor(pts, dtype=torch.float32).to(device), torch.tensor(B, dtype=torch.float32).to(device)
+
+def load_surface_amp_data(file_path, R_lunar, device):
+    # Adapt if your format is different!
+    loader = Lunar_surface_data_loader(filename=file_path)
+    pts = np.stack([loader.x_coord, loader.y_coord, loader.z_coord], axis=-1) / R_lunar
+    amp = torch.tensor(loader.B, dtype=torch.float32).to(device)
+    return torch.tensor(pts, dtype=torch.float32).to(device), amp
+
+def load_surface_vector_data(file_path, R_lunar, device):
+    loader = Lunar_surface_data_loader(filename=file_path)
+    pts = np.stack([loader.x_coord, loader.y_coord, loader.z_coord], axis=-1) / R_lunar
+    B = np.stack([loader.b_x, loader.b_y, loader.b_z], axis=-1)
+    return torch.tensor(pts, dtype=torch.float32).to(device), torch.tensor(B, dtype=torch.float32).to(device)
+
+def make_loader_from_points(points, targets, batch_size, shuffle=True):
+    dataset = TensorDataset(points, targets)
+    return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
+
+def build_all_data_loaders(config, device):
+    R_lunar = config['R_lunar']
+    batch_size = config['batch_size']
+    data_spec = config['data']
+
+    # Orbital data (vector measurements on orbit)
+    orbital_loaders = []
+    for file in data_spec.get('orbital', []):
+        pts, vecs = load_orbital_data(file, R_lunar, device)
+        orbital_loaders.append(make_loader_from_points(pts, vecs, batch_size, shuffle=True))
+
+    # Surface data: amplitude only
+    surface_amp_loaders = []
+    for file in data_spec.get('surface_amplitude', []):
+        pts, amps = load_surface_amp_data(file, R_lunar, device)
+        surface_amp_loaders.append(make_loader_from_points(pts, amps, batch_size, shuffle=True))
+
+    # Surface data: vectors (Bx, By, Bz)
+    surface_vec_loaders = []
+    for file in data_spec.get('surface_vector', []):
+        pts, vecs = load_surface_vector_data(file, R_lunar, device)
+        surface_vec_loaders.append(make_loader_from_points(pts, vecs, batch_size, shuffle=True))
+
+    return {
+        'orbital': orbital_loaders,
+        'surface_amplitude': surface_amp_loaders,
+        'surface_vector': surface_vec_loaders
+    }
