@@ -1,16 +1,11 @@
 device: "cuda"
-output_dir: "./Outputs/exp1/"
+output_dir: "/home/memolnar/Projects/lunarmagnetism/Outputs/real_data/v2_mag_inversion/"
 R_lunar: 1737e3
 batch_size: 65536
 
 data:
   orbital:
     - path: "/home/memolnar/Projects/lunarmagnetism/data/Moon_Mag_100km.txt"
-      source: "LRO"
-    - path: "/data/Moon_Mag_100km_Kaguya.txt"
-      source: "Kaguya"
-  surface_amplitude:
-    - path: "/data/surface_amp_LRO.txt"
       source: "LRO"
 
 collocation:

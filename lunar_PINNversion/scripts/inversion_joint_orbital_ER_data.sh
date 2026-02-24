@@ -7,7 +7,7 @@ cd /home/memolnar/Projects/lunarmagnetism
 # Hardcoded list of YAML config files
 # Just add/remove paths as needed!
 CONFIGS=(
-    "/home/memolnar/Projects/lunarmagnetism/lunar_PINNversion/config/inversion_LRO_orbiter_only.yaml"
+    "/home/memolnar/Projects/lunarmagnetism/lunar_PINNversion/config/inversion_combined_mag_ER.yaml"
     # Add further YAML files here
 )
 

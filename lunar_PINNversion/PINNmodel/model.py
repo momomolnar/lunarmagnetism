@@ -12,6 +12,7 @@ from torch.optim.lr_scheduler import ExponentialLR
 from lunar_PINNversion.evaluation.mollweide_plot import plot_three_component_mollweide, plot_four_component_mollweide
 from lunar_PINNversion.dataloader.util import spherical_to_cartesian
 import wandb
+from types import SimpleNamespace
 
 R_lunar = 1737e3 # m
 
@@ -122,25 +123,15 @@ class PINN(nn.Module):
             'w0': w0,
             'w0_initial': w0_initial
         }
-        # # in_dim = self.pe.out_dim()
-        # layer_dims = [in_dim] + layers + [1]
-        #
-        # net = []
-        # for i in range(len(layer_dims) - 1):
-        #     net.append(nn.Linear(layer_dims[i], layer_dims[i + 1]))
-        #     if i < len(layer_dims) - 2:
-        #         net.append(nn.Tanh())
-        # self.net = nn.Sequential(*net)
+
 
     def forward(self, xyz):
-        # xyz_pe = self.pe.forward(xyz)
-        # return self.net(xyz_pe)
         return self.net(xyz)
 
     def generate_collocation_points(self, n_points=5000):
         """Generate random collocation points"""
         domain = np.random.rand(int(n_points), 3)
-        domain[:, 0] = domain[:, 0] * 1e5 + R_lunar
+        domain[:, 0] = domain[:, 0] * 1e5 + float(R_lunar)
         domain[:, 1] = domain[:, 1] * np.pi
         domain[:, 2] = domain[:, 2] * 2 * np.pi - np.pi
 
@@ -280,11 +271,8 @@ class PINN(nn.Module):
 
     def train_pinn(
             self,
-            inner_loader,
-            boundary_loader,
-            lunar_data,
+            boundary_dataloader,
             epochs,
-            lambda_domain=1.0,
             lambda_bc=100.0,
             period_eval=100,
             checkpoint_every=500,  # Save checkpoint every N epochs
@@ -311,6 +299,7 @@ class PINN(nn.Module):
             best_loss = checkpoint.get('best_loss', float('inf'))
 
             # Restore optimizer
+
             optimizer = optim.Adam(self.parameters(), lr=initial_lr)
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
 
@@ -349,7 +338,7 @@ class PINN(nn.Module):
                 boundary_points = boundary_points_full[indices]
                 B_measured = B_measured_full[indices]
                 boundary_dataset = TensorDataset(boundary_points, B_measured)
-                boundary_loader = DataLoader(boundary_dataset, batch_size=batch_size, shuffle=True)
+                boundary_dataloader = DataLoader(boundary_dataset, batch_size=batch_size, shuffle=True)
 
             # Resample collocation points periodically
             if epoch % resample_colloc_every == 0:
@@ -362,7 +351,7 @@ class PINN(nn.Module):
 
             # ✅ BEST: Use zip - clean and efficient
             # Automatically stops when shortest loader is exhausted
-            for (x_bc, B_bc), (x_inner,) in zip(boundary_loader, inner_loader):
+            for (x_bc, B_bc), (x_inner,) in zip(boundary_dataloader, inner_loader):
                 optimizer.zero_grad()
 
                 # ✅ Mixed precision forward pass
@@ -402,7 +391,7 @@ class PINN(nn.Module):
             })
 
             if epoch % period_eval == 0:
-                self.evaluate_model(epoch, lunar_data, output_dir)
+                self.evaluate_model(epoch, boundary_dataloader, output_dir)
 
             # if epoch % 10 == 0:
             #     print(f"Epoch {epoch}:")
@@ -440,173 +429,11 @@ class PINN(nn.Module):
             is_best=False
         )
 
-        def train_pinn(
-                self,
-                inner_loader,
-                boundary_loader,
-                lunar_data,
-                epochs,
-                lambda_domain=1.0,
-                lambda_bc=100.0,
-                period_eval=100,
-                checkpoint_every=500,  # Save checkpoint every N epochs
-                boundary_points_full=None,
-                B_measured_full=None,
-                n_boundary_samples=60000,
-                n_colloc_samples=10,
-                resample_boundary_every=10,
-                resample_colloc_every=5,
-                initial_lr=1e-3,
-                target_lr=1e-6,
-                use_amp=False,  # Enable mixed precision
-                output_dir="",
-                resume_from=None,  # Path to checkpoint to resume from
-                batch_size=8096,
-        ):
-            start_epoch = 0
-            best_loss = float('inf')
-
-            if resume_from is not None and os.path.exists(resume_from):
-                print(f"Resuming training from {resume_from}")
-                _, checkpoint = self.load_checkpoint(resume_from, self.device)
-                start_epoch = checkpoint['epoch'] + 1
-                best_loss = checkpoint.get('best_loss', float('inf'))
-
-                # Restore optimizer
-                optimizer = optim.Adam(self.parameters(), lr=initial_lr)
-                optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-
-                # Restore scheduler
-                gamma = (target_lr / initial_lr) ** (1 / epochs)
-                scheduler = ExponentialLR(optimizer, gamma=gamma)
-                scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
-
-                # Restore scaler if using AMP
-                scaler = None
-                if use_amp:
-                    scaler = GradScaler()
-                    if 'scaler_state_dict' in checkpoint:
-                        scaler.load_state_dict(checkpoint['scaler_state_dict'])
-
-                print(f"Resuming from epoch {start_epoch}")
-            else:
-                optimizer = optim.Adam(self.parameters(), lr=initial_lr)
-                gamma = (target_lr / initial_lr) ** (1 / epochs)
-                scheduler = ExponentialLR(optimizer, gamma=gamma)
-                scaler = GradScaler() if use_amp else None
-
-            # ✅ Initialize gradient scaler for mixed precision
-            scaler = GradScaler() if use_amp else None
-
-            if use_amp:
-                print("Training with Automatic Mixed Precision (AMP)")
-
-            epoch_bar = tqdm(range(epochs), desc="Training", unit="epoch")
-
-            for epoch in epoch_bar:
-                lambda_domain = min(1.0, epoch / 100000)
-                # Resample boundary data periodically
-                if epoch % resample_boundary_every == 0 and boundary_points_full is not None:
-                    indices = torch.randperm(len(boundary_points_full))[:n_boundary_samples]
-                    boundary_points = boundary_points_full[indices]
-                    B_measured = B_measured_full[indices]
-                    boundary_dataset = TensorDataset(boundary_points, B_measured)
-                    boundary_loader = DataLoader(boundary_dataset, batch_size=batch_size, shuffle=True)
-
-                # Resample collocation points periodically
-                if epoch % resample_colloc_every == 0:
-                    domain_xyz = self.generate_collocation_points(n_points=n_colloc_samples)
-                    inner_dataset = TensorDataset(domain_xyz)
-                    inner_loader = DataLoader(inner_dataset, batch_size=batch_size, shuffle=True)
-
-                epoch_losses = {'bc': 0.0, 'pde': 0.0}
-                n_iters = 0
-
-                # ✅ BEST: Use zip - clean and efficient
-                # Automatically stops when shortest loader is exhausted
-                for (x_bc, B_bc), (x_inner,) in zip(boundary_loader, inner_loader):
-                    optimizer.zero_grad()
-
-                    # ✅ Mixed precision forward pass
-                    if use_amp:
-                        with autocast():
-                            bc_loss = self.boundary_condition_loss(x_bc, B_bc)
-                            lap = self.compute_laplacian(x_inner)
-                            pde_loss = torch.mean(lap ** 2)
-                            total_loss = lambda_bc * bc_loss + lambda_domain * pde_loss
-
-                        # Scaled backward and optimizer step
-                        scaler.scale(total_loss).backward()
-                        scaler.step(optimizer)
-                        scaler.update()
-                    else:
-                        # Standard precision
-                        bc_loss = self.boundary_condition_loss(x_bc, B_bc)
-                        lap = self.compute_laplacian(x_inner)
-                        pde_loss = torch.mean(lap ** 2)
-                        total_loss = lambda_bc * bc_loss + lambda_domain * pde_loss
-
-                        total_loss.backward()
-                        optimizer.step()
-
-                    # Track for logging
-                    epoch_losses['bc'] += bc_loss.item()
-                    epoch_losses['pde'] += pde_loss.item()
-                    n_iters += 1
-
-                scheduler.step()
-
-                epoch_bar.set_postfix({
-                    "bc": f"{bc_loss.item():.3e}",
-                    "pde": f"{pde_loss.item():.3e}",
-                    "lr": f"{optimizer.param_groups[0]['lr']:.1e}"
-                })
-
-                if epoch % period_eval == 0:
-                    self.evaluate_model(epoch, lunar_data, output_dir)
-
-                # if epoch % 10 == 0:
-                #     print(f"Epoch {epoch}:")
-                #     print(f"  Establ:     {epoch - t0:.3f}")
-                #     print(f"  BC loss0:    {t1 - t01:.3f}s")
-                #     print(f"  BC loss:    {t1 - t0:.3f}s")
-                #     print(f"  PDE loss:   {t2 - t1:.3f}s")
-                #     print(f"  Backward:   {t3 - t2:.3f}s")
-                #     print(f"  Opt step:   {t4 - t3:.3f}s")
-                #     print(f"  Total:      {t0 - epoch_start:.3f}s")
-
-                # Save checkpoint periodically
-                if epoch % checkpoint_every == 0 and epoch > 0:
-                    is_best = total_loss < best_loss
-                    if is_best:
-                        best_loss = total_loss
-                    self.save_checkpoint(
-                        epoch=epoch,
-                        optimizer=optimizer,
-                        scheduler=scheduler,
-                        scaler=scaler,
-                        output_dir=output_dir,
-                        best_loss=best_loss,
-                        is_best=is_best
-                    )
-
-                # Save final checkpoint
-            self.save_checkpoint(
-                epoch=epochs - 1,
-                optimizer=optimizer,
-                scheduler=scheduler,
-                scaler=scaler,
-                output_dir=output_dir,
-                best_loss=best_loss,
-                is_best=False
-            )
 
     def train_pinn_with_surface_data(
             self,
-            inner_loader,
-            boundary_loader,
+            boundary_dataloader,
             surface_loader,
-            lunar_data,
             epochs,
             lambda_domain=1.0,
             lambda_bc=100.0,
@@ -695,18 +522,18 @@ class PINN(nn.Module):
                 boundary_points = boundary_points_full[indices]
                 B_measured = B_measured_full[indices]
                 boundary_dataset = TensorDataset(boundary_points, B_measured)
-                boundary_loader = DataLoader(boundary_dataset, batch_size=batch_size, shuffle=True)
+                boundary_dataloader = DataLoader(boundary_dataset, batch_size=batch_size, shuffle=True)
 
             # Resample collocation points periodically
             if epoch % resample_colloc_every == 0:
                 domain_xyz = self.generate_collocation_points(n_points=n_colloc_samples)
                 inner_dataset = TensorDataset(domain_xyz)
-                inner_loader = DataLoader(inner_dataset, batch_size=batch_size, shuffle=True)
+                collocation_dataloader = DataLoader(inner_dataset, batch_size=batch_size, shuffle=True)
 
             epoch_losses = {'bc': 0.0, 'pde': 0.0, 'surf':0}
             n_iters = 0
 
-            for (x_bc, B_bc), (x_inner,), (x_surface, B_surface) in zip(boundary_loader, inner_loader, surface_loader):
+            for (x_bc, B_bc), (x_inner,), (x_surface, B_surface) in zip(boundary_dataloader, collocation_dataloader, surface_loader):
                 optimizer.zero_grad()
 
                 # ✅ Mixed precision forward pass
@@ -767,7 +594,7 @@ class PINN(nn.Module):
             })
 
             if epoch % period_eval == 0:
-                self.evaluate_model(epoch, lunar_data, output_dir)
+                self.evaluate_model(epoch, boundary_dataloader, output_dir)
 
 
             if epoch % checkpoint_every == 0 and epoch > 0:
@@ -795,9 +622,10 @@ class PINN(nn.Module):
             best_loss=best_loss,
             is_best=False
         )
-    def evaluate_model(self, epoch, lunar_data, output_dir):
+
+    def evaluate_model(self, epoch, boundary_dataloader, output_dir):
         # Predict the potential and field after training
-        self.plot_B_eval(epoch, lunar_data, output_dir)
+        self.plot_B_eval(epoch, boundary_dataloader, output_dir)
 
         wandb.log({
             "eval/surface_B": wandb.Image(f"{output_dir}/eval_surface_{epoch:d}.png"),
@@ -808,7 +636,8 @@ class PINN(nn.Module):
             wandb.log({
                 "eval/true_BC": wandb.Image(f"{output_dir}/true_BC_{epoch:d}.png")
             })
-    def plot_B_eval(self, epoch, lunar_data, output_dir,
+
+    def plot_B_eval(self, epoch, boundary_loader, output_dir,
                     num_pts=400, height_obs=1e5):
 
         def spherical_to_cartesian(r, theta, phi):
@@ -881,6 +710,33 @@ class PINN(nn.Module):
                                        share_colorbar=False)
 
         if epoch == 0:
+            if hasattr(boundary_loader.dataset, 'tensors'):
+                points, B = boundary_loader.dataset.tensors
+            else:
+                # It's a ConcatDataset
+                plist, Blist = [], []
+                for ds in boundary_loader.dataset.datasets:
+                    p, b = ds.tensors
+                    plist.append(p)
+                    Blist.append(b)
+                points = torch.cat(plist, dim=0)
+                B = torch.cat(Blist, dim=0)
+
+            x, y, z = points[:, 0].cpu().numpy(), points[:, 1].cpu().numpy(), points[:, 2].cpu().numpy()
+            b_x, b_y, b_z = B[:, 0].cpu().numpy(), B[:, 1].cpu().numpy(), B[:, 2].cpu().numpy()
+
+            r = np.sqrt(x ** 2 + y ** 2 + z ** 2)
+            theta = np.arcsin(z / r)  # latitude: -pi/2 to pi/2
+            phi = np.arctan2(y, x)  # longitude: -pi to pi
+
+            lunar_data = SimpleNamespace(
+                phi=phi,
+                theta=theta,
+                b_x=b_x,
+                b_y=b_y,
+                b_z=b_z
+            )
+
             plot_four_component_mollweide(lunar_data.phi[::2],
                                        lunar_data.theta[::2],
                                        lunar_data.b_x[::2],
@@ -907,15 +763,12 @@ def train_new_model():
     # B_measured_full = ...
 
     model.train_pinn(
-        inner_loader=None,
         boundary_loader=None,
-        lunar_data=None,
         epochs=10000,
         output_dir="./checkpoints",
         checkpoint_every=500,  # Save every 500 epochs
         resume_from=None  # Start from scratch
     )
-
 
 def resume_training():
     """Example: Resume training from checkpoint"""
@@ -926,15 +779,12 @@ def resume_training():
 
     # Continue training
     model.train_pinn(
-        inner_loader=None,
         boundary_loader=None,
-        lunar_data=None,
         epochs=10000,
         output_dir="./checkpoints",
         checkpoint_every=500,
         resume_from='./checkpoints/checkpoint_latest.pt'  # Resume from here
     )
-
 
 def evaluate_from_checkpoint():
     """Example: Load model and evaluate without training"""

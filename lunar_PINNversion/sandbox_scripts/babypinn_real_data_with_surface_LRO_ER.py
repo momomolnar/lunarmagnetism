@@ -7,7 +7,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 import matplotlib.pyplot as pl
-from lunar_PINNversion.model import PINN
+from lunar_PINNversion.PINNmodel.model import PINN
 from lunar_PINNversion.dataloader.dataLoader import Lunar_data_loader, Lunar_surface_ER_data_loader
 from lunar_PINNversion.dataloader.util import spherical_to_cartesian
 from lunar_PINNversion.evaluation.mollweide_plot import plot_three_component_mollweide, plot_four_component_mollweide
