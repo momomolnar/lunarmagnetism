@@ -42,8 +42,9 @@ def main(config):
 
     # You may want to adapt arguments to your preferred convention!
 
-    pinn.train_pinn(
+    pinn.train_pinn_with_surface_data(
         boundary_loader=orbital_loader,
+        surface_loader = surface_vec_loader,
         **train_args,
         output_dir=output_dir,
         batch_size=batch_size,
