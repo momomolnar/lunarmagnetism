@@ -16,37 +16,45 @@ import matplotlib.pyplot as pl
 class PositionalEncoding(nn.Module):
 
     def __init__(self, num_freqs, d_input, max_freq=8):
+        """Create fixed Fourier features for low-dimensional coordinate inputs."""
         super().__init__()
         frequencies = 2 ** torch.linspace(0, max_freq, num_freqs)
         self.frequencies = nn.Parameter(frequencies[None, :, None], requires_grad=False)
         self.d_output = d_input * (num_freqs * 2)
 
     def forward(self, x):
+        """Encode coordinates with concatenated sine/cosine Fourier features."""
         encoded = x[:, None, :] * torch.pi * self.frequencies
         encoded = encoded.reshape(x.shape[0], -1)
         encoded = torch.cat([torch.sin(encoded), torch.cos(encoded)], -1)
         return encoded
 
 def create_collocation_data(x_c, y_c, z_c):
+    """Build collocation tensor from separate coordinate arrays."""
     return torch.tensor(np.hstack([x_c, y_c, z_c]), requires_grad=True, dtype=torch.float32)
 
 def create_boundary_data_pts(x_b, y_b, z_b):
+    """Build boundary coordinate tensor from separate coordinate arrays."""
     bc_pts = torch.tensor(np.hstack([x_b, y_b, z_b]), requires_grad=True, dtype=torch.float32)
     return bc_pts
 
 def create_boundary_data(B_bc_vals):
+    """Convert boundary field labels to a trainable tensor."""
     bc_vals = torch.tensor(B_bc_vals, dtype=torch.float32, requires_grad=True)
     return bc_vals
 
 def colloc_data_loader(colloc_data, batch_size=32):
+    """Create DataLoader for collocation points."""
     dataset = TensorDataset(colloc_data)
     return DataLoader(dataset, batch_size=batch_size, shuffle=False)
 
 def boundary_data_loader(bc_vals, batch_size=32):
+    """Create DataLoader for boundary values or points."""
     dataset = TensorDataset(bc_vals)
     return DataLoader(dataset, batch_size=batch_size, shuffle=False)
 
 def create_dataloaders(h=1.0, N_colloc=10000, N_bc=4096, batch_size=4096):
+    """Generate synthetic data tensors used in this sandbox PINN experiment."""
     x_c, y_c, z_c, x_b, y_b, z_b, B_bc_vals = create_synthetic_set(h, N_colloc, N_bc)
 
     colloc_data = create_collocation_data(x_c, y_c, z_c)
@@ -61,10 +69,12 @@ def create_dataloaders(h=1.0, N_colloc=10000, N_bc=4096, batch_size=4096):
     return colloc_data, bc_pts, bc_vals
 
 def true_phi(x, y, z, kx=4, ky=4):
+    """Analytical potential used for synthetic supervision."""
     kz = np.sqrt(kx**2 + ky**2)
     return np.exp(kz * z) * np.sin(kx * x) * np.cos(ky * y)
 
 def true_B(x, y, z,  kx=torch.tensor(6), ky=torch.tensor(6)):
+    """Analytical magnetic field corresponding to the sandbox potential."""
     kx = torch.tensor(kx)
     ky = torch.tensor(ky)
     kz = torch.sqrt((kx**2 + ky**2))
@@ -79,6 +89,7 @@ def true_B(x, y, z,  kx=torch.tensor(6), ky=torch.tensor(6)):
                         Bz], axis=-1)
 
 def create_synthetic_set(h=1.0, N_colloc=3000, N_bc=10000):
+    """Sample collocation and boundary points with analytical boundary fields."""
     # Collocation points
     x_c = np.random.rand(N_colloc, 1)
     y_c = np.random.rand(N_colloc, 1)
@@ -98,6 +109,7 @@ def create_synthetic_set(h=1.0, N_colloc=3000, N_bc=10000):
 # Define the neural network model
 class PINN(nn.Module):
     def __init__(self, input_size, hidden_size, output_size, num_freqs, max_freq=8):
+        """Initialize a small MLP PINN with positional encoding."""
         super(PINN, self).__init__()
         self.positional_encoding = PositionalEncoding(num_freqs, input_size, max_freq)
         self.hidden = nn.Sequential(
@@ -116,12 +128,14 @@ class PINN(nn.Module):
         )
 
     def forward(self, x):
+        """Predict scalar potential for encoded coordinates."""
         x_encoded = self.positional_encoding(x)
         # x_encoded = x
         return self.hidden(x_encoded)
 
 # Compute the Laplacian using automatic differentiation
 def compute_laplacian(model, inputs):
+    """Compute Laplacian-based PDE residual loss for a batch of inputs."""
     # inputs should require grad
     inputs = inputs.requires_grad_(True)
     phi = model(inputs)                 # shape (N, 1)
@@ -146,6 +160,7 @@ def compute_laplacian(model, inputs):
 
 # Define the boundary condition loss function
 def boundary_condition_loss(model, inputs, B_measured):
+    """Compute boundary MSE loss on magnetic field vectors."""
     phi = model(inputs.requires_grad_(True))
     grad_phi = torch.autograd.grad(outputs=phi, inputs=inputs, grad_outputs=torch.ones_like(phi),
                                    create_graph=True)[0]
@@ -157,6 +172,7 @@ def boundary_condition_loss(model, inputs, B_measured):
 def train_pinn(model, x_inner, x_boundary, B_measured, epochs, lr,
                lambda_domain=1, lambda_bc=1, period_log=1000, period_eval=5000,
                step_size=1000, gamma=0.95):
+    """Train sandbox PINN with Laplacian and boundary losses."""
     optimizer = optim.Adam(model.parameters(), lr=lr)
     scheduler = optim.lr_scheduler.StepLR(optimizer,
                                           step_size=step_size, gamma=gamma)  # Example scheduler
@@ -177,6 +193,7 @@ def train_pinn(model, x_inner, x_boundary, B_measured, epochs, lr,
         scheduler.step()  # Update the learning rate at the end of each epoch
 
 def evaluate_model(model, epoch):
+    """Visualize predicted vs analytical magnetic field slices during training."""
     # Predict the potential and field after training
 
     kx = ky = 4

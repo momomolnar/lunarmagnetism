@@ -10,6 +10,7 @@ from lunar_PINNversion.dataloader.dataLoader import (spherical_to_cartesian,
 import wandb
 
 def main(config):
+    """Run orbital-only inversion training from a loaded config dictionary."""
     device = torch.device(config.get('device', 'cuda') if torch.cuda.is_available() else 'cpu')
     R_lunar = config['R_lunar']
     batch_size = config['batch_size']

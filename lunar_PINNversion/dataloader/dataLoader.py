@@ -9,16 +9,19 @@ from torch.utils.data import DataLoader, TensorDataset, ConcatDataset
 class Generic_data_loader():
 
     def __init__(self, filename):
+        """Store file path and common lunar geometry constants."""
         self.filename = filename
         self.R_lunar = 1737e3
         self.height_measurement = 1e5
 
     def __load_data__(self):
+        """Load orbital vector measurements from text and convert angles to radians."""
         self.data = np.loadtxt(self.filename).T
         self.theta, self.phi = self.data[0] / 180 * np.pi, self.data[1] / 180 * np.pi
         self.b_phi, self.b_theta, self.b_r =self.data[2], self.data[3], self.data[4]
 
     def __load_surface_data__(self):
+        """Load surface scalar measurements from text and convert angles to radians."""
         self.data = np.loadtxt(self.filename).T
         self.theta, self.phi = self.data[0] / 180 * np.pi, self.data[1] / 180 * np.pi
         self.B = self.data[2]
@@ -26,34 +29,42 @@ class Generic_data_loader():
 class Lunar_data_loader(Generic_data_loader):
 
     def __init__(self,filename):
+        """Load orbital data and precompute Cartesian positions and vectors."""
         super().__init__(filename)
         self.__load_data__()
         self.transform_spherical_to_cartesian()
 
     def transform_spherical_to_cartesian(self):
+        """Convert stored spherical coordinates and vector components to Cartesian."""
         self.x_coord, self.y_coord, self.z_coord = spherical_to_cartesian((np.ones_like(self.theta) * self.R_lunar
                                                                            +self.height_measurement),
                                                                            self.theta, self.phi)
-        self.b_x, self.b_y, self.b_z = spherical_vector_to_cartesian(self.b_r, self.b_theta,
-                                                                    self.b_phi,
-                                                                    (np.ones_like(self.theta) * self.R_lunar
-                                                                    + self.height_measurement),
-                                                                     self.theta, self.phi,
-                                                                     degrees=True)
+        self.b_x, self.b_y, self.b_z = spherical_vector_to_cartesian(
+            self.b_r,
+            self.b_theta,
+            self.b_phi,
+            (np.ones_like(self.theta) * self.R_lunar + self.height_measurement),
+            self.theta,
+            self.phi,
+            degrees=False,
+        )
 
 class Lunar_surface_data_loader(Generic_data_loader):
 
     def __init__(self, filename):
+        """Load surface measurements and convert coordinates to Cartesian."""
         super().__init__(filename)
         self.__load_surface_data__()
         self.transform_spherical_to_cartesian()
 
     def transform_spherical_to_cartesian(self):
+        """Convert lunar surface spherical coordinates to Cartesian coordinates."""
         self.x_coord, self.y_coord, self.z_coord = spherical_to_cartesian((np.ones_like(self.theta) * self.R_lunar),
                                                                           self.theta, self.phi)
 
 class Lunar_surface_ER_data_loader(Lunar_surface_data_loader):
     def __init__(self, filename):
+        """Load LRO electron-reflectometry derived amplitudes on the lunar surface."""
         self.filename = filename
         self.__read_LRO_data__()
         self.R_lunar = 1737e3
@@ -123,6 +134,7 @@ def load_orbital_data(path, source, R_lunar, device):
     return torch.tensor(pts, dtype=torch.float32).to(device), torch.tensor(B, dtype=torch.float32).to(device)
 
 def load_surface_amp_data(path, source, R_lunar, device):
+    """Load surface amplitude measurements and return normalized points and amplitudes."""
     if source == "Apollo":
         loader = Lunar_surface_data_loader(filename=path)
     elif source == "LRO-ER":
@@ -134,6 +146,7 @@ def load_surface_amp_data(path, source, R_lunar, device):
     return torch.tensor(pts, dtype=torch.float32).to(device), amp
 
 def load_surface_vector_data(path, source, R_lunar, device):
+    """Load surface vector measurements and return normalized points and vectors."""
     if source == "Apollo":
         loader = Lunar_surface_data_loader(filename=path)
     elif source == "MagROVER":
@@ -145,10 +158,12 @@ def load_surface_vector_data(path, source, R_lunar, device):
     return torch.tensor(pts, dtype=torch.float32).to(device), torch.tensor(B, dtype=torch.float32).to(device)
 
 def make_loader_from_points(points, targets, batch_size, shuffle=True):
+    """Build a PyTorch DataLoader from point/target tensors."""
     dataset = TensorDataset(points, targets)
     return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
 
 def build_all_data_loaders(config, device):
+    """Create loader groups for orbital, surface amplitude, and surface vector data."""
     R_lunar = config['R_lunar']
     batch_size = config['batch_size']
     data_spec = config['data']
@@ -199,20 +214,25 @@ def build_data_loaders(data_section, R_lunar, device, batch_size):
     return orbital_dl, surf_amp_dl, surf_vec_dl
 
 def generate_collocation_loader(n_points, R_lunar, spherical_to_cartesian, device, batch_size, r_offset=0):
-    domain = np.random.rand(n_points, 3)
-    domain[:, 0] = domain[:, 0] * 1e5 + float(R_lunar) + r_offset
-    domain[:, 1] = domain[:, 1] * np.pi - np.pi / 2
-    domain[:, 2] = domain[:, 2] * 2 * np.pi - np.pi
-    domain_xyz = np.array([spherical_to_cartesian(el[0] / float(R_lunar), el[1], el[2]) for el in domain])
-    domain_xyz = torch.tensor(domain_xyz, dtype=torch.float32).to(device)
+    """Sample collocation points in spherical space and return a Cartesian DataLoader."""
+    domain = torch.rand(n_points, 3, device=device, dtype=torch.float32)
+    r = domain[:, 0] * (1e5 / float(R_lunar)) + 1.0 + r_offset / float(R_lunar)
+    theta = domain[:, 1] * np.pi - np.pi / 2
+    phi = domain[:, 2] * 2 * np.pi - np.pi
+    x = r * torch.cos(theta) * torch.cos(phi)
+    y = r * torch.cos(theta) * torch.sin(phi)
+    z = r * torch.sin(theta)
+    domain_xyz = torch.stack((x, y, z), dim=-1)
     return DataLoader(TensorDataset(domain_xyz), batch_size=batch_size, shuffle=True)
 
 def concat_data_loaders(loader_list, batch_size):
+    """Concatenate multiple loaders into one shuffled loader."""
     if not loader_list:
         return None
     dataset = ConcatDataset([l.dataset for l in loader_list])
     return DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
 def load_config(config_path):
+    """Read a YAML configuration file and return it as a Python dictionary."""
     with open(config_path, 'r') as f:
         return yaml.safe_load(f)

@@ -69,6 +69,7 @@ def save_Bfield_csv_numpy(
     Bmag,
     filename
 ):
+    """Save longitude/latitude grid and B-field components into a flat CSV file."""
     import numpy as np
     import os
 

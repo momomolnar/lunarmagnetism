@@ -10,6 +10,7 @@ from lunar_PINNversion.dataloader.dataLoader import (spherical_to_cartesian,
 
 
 def main(config):
+    """Run joint orbital and surface inversion training from a config dictionary."""
     device = torch.device(config.get('device', 'cuda') if torch.cuda.is_available() else 'cpu')
     R_lunar = config['R_lunar']
     batch_size = config['batch_size']
@@ -43,8 +44,8 @@ def main(config):
     # You may want to adapt arguments to your preferred convention!
 
     pinn.train_pinn_with_surface_data(
-        boundary_loader=orbital_loader,
-        surface_loader = surface_vec_loader,
+        boundary_dataloader=orbital_loader,
+        surface_loader=surface_amp_loader,
         **train_args,
         output_dir=output_dir,
         batch_size=batch_size,

@@ -23,9 +23,11 @@ ky = 12
 kz = np.sqrt(kx**2 + ky**2)
 
 def true_phi_np(x, y, z):
+    """Analytical scalar potential in NumPy form for evaluation/plots."""
     return np.cos(kx*x) * np.sin(ky*y) * np.exp(-kz*z)
 
 def true_phi_torch(xyz):
+    """Analytical scalar potential in Torch form for autograd workflows."""
     x = xyz[:,0:1]
     y = xyz[:,1:2]
     z = xyz[:,2:3]
@@ -36,6 +38,7 @@ def true_phi_torch(xyz):
     )
 
 def true_H_torch(xyz):
+    """Compute analytical magnetic field H = -grad(phi) for given coordinates."""
     xyz.requires_grad_(True)
     phi = true_phi_torch(xyz)
     grad = torch.autograd.grad(phi, xyz, torch.ones_like(phi),
@@ -50,6 +53,7 @@ def true_H_torch(xyz):
 
 class PositionalEncoding(nn.Module):
     def __init__(self, in_dim=3, num_frequencies=4, base_freq = 0.98):
+        """Store Fourier feature settings and precompute frequency bands."""
         super().__init__()
         self.in_dim = in_dim
         self.num_frequencies = num_frequencies
@@ -67,12 +71,14 @@ class PositionalEncoding(nn.Module):
         return torch.cat(enc, dim=-1)
 
     def out_dim(self):
+        """Return output feature width after positional encoding."""
         return self.in_dim * (1 + 2 * self.num_frequencies)
 
 
 class PINN(nn.Module):
     def __init__(self, pe_num_freqs =6, base_freq = 1.3,
                  layers=[64,128,128,128]):
+        """Build MLP PINN that predicts scalar potential from encoded coordinates."""
         super().__init__()
         # in_dim = 3
 
@@ -90,12 +96,14 @@ class PINN(nn.Module):
         self.net = nn.Sequential(*net)
 
     def forward(self, xyz):
+        """Predict scalar potential for batched Cartesian points."""
         xyz_pe = self.pe.forward(xyz)
         return self.net(xyz_pe)
         # return self.net(xyz)
 
 # Evaluate PINN solution on z=0 and z=1
 def evaluate_phi(model_cpu, z_value):
+    """Evaluate predicted and analytical potentials on a fixed-z grid."""
     pts = np.stack([X.flatten(), Y.flatten(), z_value*np.ones_like(X.flatten())], axis=1)
     pts_t = torch.tensor(pts, dtype=torch.float32)
     with torch.no_grad():
@@ -292,6 +300,7 @@ model = PINN(pe_num_freqs =6, base_freq = 1.4,)
 # Laplacian
 # -------------------------
 def laplacian_phi(model, xyz):
+    """Compute scalar-potential Laplacian for PDE residual evaluation."""
     xyz.requires_grad_(True)
     phi = model(xyz)
 
@@ -497,5 +506,4 @@ plt.colorbar()
 plt.tight_layout()
 plt.savefig('../Outputs/example_new.png')
 plt.show()
-
 

@@ -18,6 +18,7 @@ R_lunar = 1737e3 # m
 
 class PositionalEncoding(nn.Module):
     def __init__(self, in_dim=3, num_frequencies=4, base_freq = 0.98):
+        """Initialize sinusoidal positional encoding frequency bands."""
         super().__init__()
         self.in_dim = in_dim
         self.num_frequencies = num_frequencies
@@ -36,10 +37,12 @@ class PositionalEncoding(nn.Module):
         return torch.cat(enc, dim=-1)
 
     def out_dim(self):
+        """Return encoded feature dimension for one input point."""
         return self.in_dim * (1 + 2 * self.num_frequencies)
 
 class SineLayer(nn.Module):
     def __init__(self, in_features, out_features, w0=30.0, is_first=False):
+        """Create one SIREN sine-activated linear layer."""
         super().__init__()
         self.w0 = w0
         self.linear = nn.Linear(in_features, out_features)
@@ -47,6 +50,7 @@ class SineLayer(nn.Module):
         self.init_weights(is_first)
 
     def init_weights(self, is_first):
+        """Apply SIREN-compatible weight initialization."""
         with torch.no_grad():
             if is_first:
                 # First layer (very important)
@@ -57,6 +61,7 @@ class SineLayer(nn.Module):
             self.linear.bias.zero_()
 
     def forward(self, x):
+        """Apply linear transform followed by scaled sine activation."""
         return torch.sin(self.w0 * self.linear(x))
 
 class SirenNet(nn.Module):
@@ -68,6 +73,7 @@ class SirenNet(nn.Module):
         w0=35.0,
         w0_initial=40.0,
     ):
+        """Build a multi-layer SIREN network for scalar potential regression."""
         super().__init__()
 
         layers = []
@@ -95,6 +101,7 @@ class SirenNet(nn.Module):
         self.net = nn.Sequential(*layers)
 
     def forward(self, x):
+        """Run the SIREN stack on input coordinates."""
         return self.net(x)
 
 class PINN(nn.Module):
@@ -102,6 +109,7 @@ class PINN(nn.Module):
     def __init__(self, hidden_dim=128,
                  num_hidden_layers=5,
                  w0=35.0, w0_initial=40.0, device=None):
+        """Initialize PINN model and keep hyperparameters for checkpointing."""
         super().__init__()
         #
         # self.pe = PositionalEncoding(in_dim=3, num_frequencies=pe_num_freqs,
@@ -126,22 +134,25 @@ class PINN(nn.Module):
 
 
     def forward(self, xyz):
+        """Predict scalar potential at normalized Cartesian coordinates."""
         return self.net(xyz)
 
     def generate_collocation_points(self, n_points=5000):
         """Generate random collocation points"""
-        domain = np.random.rand(int(n_points), 3)
-        domain[:, 0] = domain[:, 0] * 1e5 + float(R_lunar)
-        domain[:, 1] = domain[:, 1] * np.pi
-        domain[:, 2] = domain[:, 2] * 2 * np.pi - np.pi
+        domain = torch.rand(int(n_points), 3, device=self.device, dtype=torch.float32)
+        r = domain[:, 0] * (1e5 / float(R_lunar)) + 1.0
+        theta = domain[:, 1] * np.pi - np.pi / 2
+        phi = domain[:, 2] * 2 * np.pi - np.pi
 
-        domain_xyz = np.array([spherical_to_cartesian(el[0] / R_lunar, el[1], el[2])
-                               for el in domain])
-        return torch.tensor(domain_xyz, dtype=torch.float32).to(self.device)
+        x = r * torch.cos(theta) * torch.cos(phi)
+        y = r * torch.cos(theta) * torch.sin(phi)
+        z = r * torch.sin(theta)
+        return torch.stack((x, y, z), dim=-1)
 
     # Compute the Laplacian using automatic differentiation
 
     def compute_laplacian(self, xyz):
+        """Compute Laplacian of predicted potential using autograd."""
         xyz = xyz.requires_grad_(True)
         phi = self(xyz)
 
@@ -161,6 +172,7 @@ class PINN(nn.Module):
         return laplacian
 
     def compute_total_B_field_loss(self, inputs, B_measured_magnitude):
+        """MSE loss between predicted and measured magnetic-field magnitudes."""
         phi = self(inputs.requires_grad_(True))
         grad_phi = torch.autograd.grad(outputs=phi, inputs=inputs,
                                        grad_outputs=torch.ones_like(phi),
@@ -173,6 +185,7 @@ class PINN(nn.Module):
         return torch.mean((B_measured_magnitude - B_pred_magnitude)**2)
 
     def boundary_condition_loss(self, inputs, B_measured):
+        """MSE loss between predicted and measured magnetic-field vectors."""
         phi = self(inputs.requires_grad_(True))
         grad_phi = torch.autograd.grad(outputs=phi, inputs=inputs, grad_outputs=torch.ones_like(phi),
                                        create_graph=True)[0]
@@ -289,6 +302,7 @@ class PINN(nn.Module):
             resume_from=None,  # Path to checkpoint to resume from
             batch_size = 8096,
     ):
+        """Train with orbital boundary vectors and Laplacian regularization."""
         start_epoch = 0
         best_loss = float('inf')
 
@@ -452,6 +466,7 @@ class PINN(nn.Module):
             resume_from=None,  # Path to checkpoint to resume from
             batch_size = 8096,
     ):
+        """Train with orbital boundary vectors, PDE loss, and surface field magnitudes."""
         start_epoch = 0
         best_loss = float('inf')
 
@@ -539,10 +554,21 @@ class PINN(nn.Module):
                 # ✅ Mixed precision forward pass
                 if use_amp:
                     with autocast():
-                        bc_loss = self.boundary_condition_loss(x_bc, B_bc)
-                        lap = self.compute_laplacian(x_inner)
-                        pde_loss = torch.mean(lap ** 2)
-                        total_loss = lambda_bc * bc_loss + lambda_domain * pde_loss
+                        if epoch < pde_start_epoch:
+                            bc_loss = self.boundary_condition_loss(x_bc, B_bc)
+                            total_loss = lambda_bc * bc_loss
+                            pde_loss = bc_loss
+                            surface_loss = bc_loss
+                        else:
+                            bc_loss = self.boundary_condition_loss(x_bc, B_bc)
+                            surface_loss = self.compute_total_B_field_loss(x_surface, B_surface)
+                            lap = self.compute_laplacian(x_inner)
+                            pde_loss = torch.mean(lap ** 2)
+                            total_loss = (
+                                lambda_bc * bc_loss
+                                + lambda_domain * pde_loss
+                                + surface_loss * lambda_surface
+                            )
 
                     # Scaled backward and optimizer step
                     scaler.scale(total_loss).backward()
@@ -624,6 +650,7 @@ class PINN(nn.Module):
         )
 
     def evaluate_model(self, epoch, boundary_dataloader, output_dir):
+        """Run plotting-based evaluation and log generated artifacts to Weights & Biases."""
         # Predict the potential and field after training
         self.plot_B_eval(epoch, boundary_dataloader, output_dir)
 
@@ -639,17 +666,19 @@ class PINN(nn.Module):
 
     def plot_B_eval(self, epoch, boundary_loader, output_dir,
                     num_pts=400, height_obs=1e5):
+        """Evaluate and save Mollweide plots on surface and observation-height shells."""
 
         def spherical_to_cartesian(r, theta, phi):
+            """Convert spherical grid tensors to Cartesian tensors."""
             x = r * torch.cos(theta) * torch.cos(phi)
             y = r * torch.cos(theta) * torch.sin(phi)
             z = r * torch.sin(theta)
             return x, y, z
 
-        theta_linspace = torch.linspace(-torch.pi/2, torch.pi/2,num_pts)
-        phi_linspace = torch.linspace(-np.pi, torch.pi, num_pts)
-        r_lunar_surface = torch.ones(1)
-        r_BC_surface = torch.ones(1) + height_obs/R_lunar
+        theta_linspace = torch.linspace(-torch.pi / 2, torch.pi / 2, num_pts, device=self.device)
+        phi_linspace = torch.linspace(-np.pi, torch.pi, num_pts, device=self.device)
+        r_lunar_surface = torch.ones(1, device=self.device)
+        r_BC_surface = torch.ones(1, device=self.device) + height_obs / R_lunar
 
         # Create meshgrid in spherical coordinates
         # meshgrid(..., indexing='ij') gives shape [r, theta, phi]
@@ -662,8 +691,7 @@ class PINN(nn.Module):
         X_BC, Y_BC, Z_BC = spherical_to_cartesian(R_orbit_surface, Theta, Phi)
         # Stack into single tensor if needed
         grid_mesh_eval_xyz_0 = torch.stack((X_0.ravel(), Y_0.ravel(), Z_0.ravel()), dim=-1)
-        grid_mesh_eval_xyz_0 = torch.tensor(grid_mesh_eval_xyz_0, dtype=torch.float32,
-                               requires_grad=True).to(self.device)
+        grid_mesh_eval_xyz_0 = grid_mesh_eval_xyz_0.to(dtype=torch.float32).requires_grad_(True)
         phi_pred_0 = self(grid_mesh_eval_xyz_0)
         grad_phi_0 = torch.autograd.grad(outputs=phi_pred_0, inputs=grid_mesh_eval_xyz_0,
                                          grad_outputs=torch.ones_like(phi_pred_0),
@@ -672,8 +700,7 @@ class PINN(nn.Module):
         B_pred_0 = (-1 * grad_phi_0).cpu().detach().numpy()
 
         grid_mesh_eval_xyz_BC = torch.stack((X_BC.ravel(), Y_BC.ravel(), Z_BC.ravel()), dim=-1)
-        grid_mesh_eval_xyz_BC = torch.tensor(grid_mesh_eval_xyz_BC, dtype=torch.float32,
-                               requires_grad=True).to(self.device)
+        grid_mesh_eval_xyz_BC = grid_mesh_eval_xyz_BC.to(dtype=torch.float32).requires_grad_(True)
 
         phi_pred_BC = self(grid_mesh_eval_xyz_BC)
         grad_phi_BC = torch.autograd.grad(outputs=phi_pred_BC, inputs=grid_mesh_eval_xyz_BC,

@@ -68,6 +68,7 @@ def plot_component_comparison(model, true_B_func, component=2, nx=50, ny=50, dev
 
 
 def plot_magnetic_field(points, B_values, title="Magnetic Field"):
+    """Create a 2D quiver plot of magnetic vectors and return the figure."""
     fig, ax = plt.subplots(figsize=(10,10))
     ax.quiver(points[:, 0], points[:, 1], B_values[:, 0], B_values[:, 1])
     ax.set_title(title)

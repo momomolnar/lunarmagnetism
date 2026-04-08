@@ -36,6 +36,7 @@ def geographic_to_Mollweide_point(
     alpha_tol = 1.e-6
 
     def alpha_eq(x):
+        """Implicit equation used to solve Mollweide auxiliary angle alpha."""
         return np.where(np.pi / 2 - np.abs(points_geographic[..., 1]) < alpha_tol, points_geographic[..., 1],
                         2 * x + np.sin(2 * x) - np.pi * np.sin(points_geographic[..., 1]))
 
@@ -104,6 +105,7 @@ def geographic_to_Cartesian_vector(points, dpoints):
     return tangent_vector
 
 def deg_to_rad(X):
+    """Convert degree values to radians."""
     return np.deg2rad(X)
 
 def plot_mollweide_map(lon, lat, B_field, ax=None,
@@ -321,7 +323,7 @@ def plot_four_component_mollweide(lon, lat, B_x, B_y, B_z, B_w,
                                   cbar_label="B field [nTesla]",
                                   share_colorbar=False):
     """
-    Plot four magnetic field components on Mollweide projection in 4x1 grid.
+    Plot ER-derived fields on a 2x2 Mollweide layout.
 
     Parameters:
     -----------
@@ -329,8 +331,12 @@ def plot_four_component_mollweide(lon, lat, B_x, B_y, B_z, B_w,
         Longitude values in [-pi, pi]
     lat : array-like
         Latitude values
-    B_x, B_y, B_z, B_w : array-like
-        Four magnetic field components
+    B_sc : array-like
+        Spacecraft-field estimate.
+    B_alpha : array-like
+        Alpha angle in radians (converted internally to sin(alpha)).
+    B_z, B_w : array-like
+        Additional ER-related field components (typically B_ER and B_total).
     output_file : str
         Output filename
     cnorm : str, optional
@@ -482,66 +488,52 @@ def plot_ER_data_mollweide(lon, lat, B_sc, B_alpha, B_z, B_w,
     ims : list of scatter plot objects
     """
 
+    # `cnorm` is kept for API compatibility with other plot helpers.
+    _ = cnorm
+
     # Default titles
     if titles is None:
-        titles = ['$B_{sc}$', '$\\alpha_{sc}$',
-                  '$B_{total}$']
+        titles = ['$B_{sc}$', '$\\sin(\\alpha_{sc})$', '$B_{ER}$', '$B_{total}$']
 
     # Create figure with GridSpec
     fig = plt.figure(figsize=figsize)
-    gs = GridSpec(100, 100, figure=fig, hspace=0.3,
-                  wspace=0.1)
+    gs = GridSpec(100, 100, figure=fig, hspace=0.3, wspace=0.1)
 
     # Create axes with Mollweide projection
     axes = []
     for i in range(4):
-        ax = fig.add_subplot(gs[(i //2)*50:(i //2)*50 + 45,
-                                 i%2*50:(i%2)*50+45],
-                             projection="mollweide")
+        ax = fig.add_subplot(
+            gs[(i // 2) * 50:(i // 2) * 50 + 45, (i % 2) * 50:(i % 2) * 50 + 45],
+            projection="mollweide",
+        )
         axes.append(ax)
 
-    # Data to plot
+    sin_alpha = np.sin(np.asarray(B_alpha, dtype=np.float64))
+    B_fields = [B_sc, sin_alpha, B_z, B_w]
+    norms = [
+        colors.LogNorm(vmin=vlims[0], vmax=vlims[1]),
+        colors.Normalize(vmin=-1.0, vmax=1.0),
+        colors.LogNorm(vmin=vlims[0], vmax=vlims[1]),
+        colors.LogNorm(vmin=vlims[0], vmax=vlims[1]),
+    ]
+    cmaps = [cmc.batlow, cmc.romaO, cmc.batlow, cmc.batlow]
+    cbar_labels = [cbar_label, "sin(alpha) [unitless]", cbar_label, cbar_label]
     ims = []
 
     # Plot each component
-    for ax, B_field, title in zip(axes, B_fields, titles):
+    for i, (ax, B_field, title) in enumerate(zip(axes, B_fields, titles)):
+        if i in (0, 2, 3):
+            ax.set_facecolor("black")
 
-        # Determine color limits
-        if not share_colorbar:
-            vmin = -vlims[1]  # np.nanquantile(all_data, 0.05)
-            vmax = vlims[1]  # np.nanquantile(all_data, 0.95)
-
-        # Plot with appropriate normalization
-        if ax == axes[-1]:
-            im = ax.scatter(
-                lon,
-                lat,
-                c=B_field,
-                s=1,
-                cmap=cmc.oslo,
-                rasterized=True,
-
-                norm=colors.LogNorm(
-                    vmin=vlims[0],
-                    vmax=vlims[1])
-            )
-        elif cnorm == 'symlog':
-            im = ax.scatter(
-                lon,
-                lat,
-                c=B_field,
-                s=1,
-                cmap=cmc.vik,
-                rasterized=True,
-                norm=colors.SymLogNorm(
-                    linthresh=vlims[0],
-                    linscale=vlims[0],
-                    vmin=-vlims[1],
-                    vmax=vlims[1],
-                    base=10
-                )
-            )
-
+        im = ax.scatter(
+            lon,
+            lat,
+            c=B_field,
+            s=1,
+            cmap=cmaps[i],
+            rasterized=True,
+            norm=norms[i],
+        )
 
         ax.grid(True)
         ax.set_xlabel("Longitude")
@@ -551,17 +543,27 @@ def plot_ER_data_mollweide(lon, lat, B_sc, B_alpha, B_z, B_w,
         ax.xaxis.set_label_position('bottom')
         ims.append(im)
 
-        # Add individual colorbar if not sharing
         if not share_colorbar:
-            cbar = plt.colorbar(im, ax=ax, orientation="horizontal",
-                                pad=0.15, label=cbar_label)
+            plt.colorbar(im, ax=ax, orientation="horizontal", pad=0.15, label=cbar_labels[i])
 
-    # Add shared colorbar if requested
     if share_colorbar:
-        # Add colorbar spanning all four subplots
-        cbar = fig.colorbar(ims[0], ax=axes, orientation="horizontal",
-                            pad=0.05, label=cbar_label,
-                            fraction=0.046, aspect=40)
+        plt.colorbar(
+            ims[1],
+            ax=axes[1],
+            orientation="horizontal",
+            pad=0.15,
+            label="sin(alpha) [unitless]",
+        )
+        fig.colorbar(
+            ims[0],
+            ax=[axes[0], axes[2], axes[3]],
+            orientation="horizontal",
+            pad=0.05,
+            label=cbar_label,
+            fraction=0.046,
+            aspect=40,
+        )
+
     plt.savefig(output_file, dpi=150, bbox_inches='tight')
     plt.close()
 

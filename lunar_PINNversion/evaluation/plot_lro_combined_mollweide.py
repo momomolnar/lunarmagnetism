@@ -44,13 +44,13 @@ def load_lro_combined(path):
 def build_four_panel_fields(lro_data):
     """Build the four plotted fields from loaded LRO ER data."""
     b_sc = np.asarray(lro_data.B_sc, dtype=np.float64)
-    alpha_deg = np.rad2deg(np.asarray(lro_data.alpha_c, dtype=np.float64))
+    sin_alpha = np.sin(np.asarray(lro_data.alpha_c, dtype=np.float64))
 
     b_er = np.asarray(lro_data.B, dtype=np.float64)
     # Keep panel-3 and panel-4 semantics explicit for readability.
     b_total = b_er
 
-    return b_sc, alpha_deg, b_er, b_total
+    return b_sc, sin_alpha, b_er, b_total
 
 
 def main():
@@ -89,7 +89,7 @@ def main():
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     lro_data = load_lro_combined(str(input_path))
-    b_sc, alpha_deg, b_er, b_total = build_four_panel_fields(lro_data)
+    b_sc, sin_alpha, b_er, b_total = build_four_panel_fields(lro_data)
 
     lon = lro_data.phi
     lat = lro_data.theta
@@ -117,15 +117,15 @@ def main():
         norm=colors.LogNorm(vmin=args.vmin, vmax=args.vmax),
     )
 
-    # Panel 2: cyclic colormap for angle
+    # Panel 2: sine(alpha) is unitless and bounded in [-1, 1]
     im2 = axes[1].scatter(
         lon,
         lat,
-        c=alpha_deg % 180.0,
+        c=sin_alpha,
         s=1,
-        cmap="twilight_shifted",
+        cmap=cmc.romaO,
         rasterized=True,
-        norm=colors.Normalize(vmin=0.0, vmax=180.0),
+        norm=colors.Normalize(vmin=-1.0, vmax=1.0),
     )
 
     # Panel 3: same style/range as panel 1
@@ -153,8 +153,8 @@ def main():
     )
 
     ims = [im1, im2, im3, im4]
-    titles = ["$B_{sc}$ [nT]", "$\\alpha_{sc}$ [deg]", "$B_{ER}$ [nT]", "$B_{total}$ [nT]"]
-    cbar_labels = ["B field [nT]", "Angle [deg]", "B field [nT]", "B field [nT]"]
+    titles = ["$B_{sc}$ [nT]", "$\\sin(\\alpha_{sc})$", "$B_{ER}$ [nT]", "$B_{total}$ [nT]"]
+    cbar_labels = ["B field [nT]", "sin(alpha) [unitless]", "B field [nT]", "B field [nT]"]
 
     for ax, im, title, cbar_label in zip(axes, ims, titles, cbar_labels):
         ax.grid(True)
